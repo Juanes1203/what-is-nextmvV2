@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Truck, Trash2, Edit, X, Plus } from "lucide-react";
+import { Truck, Trash2, Edit, X, Plus, Upload } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
   AlertDialog,
@@ -47,9 +47,10 @@ interface VehicleConfigProps {
   onLocationUpdate?: (type: "start" | "end", location: { lon: number; lat: number } | null) => void;
   isDialogOpen?: boolean;
   setIsDialogOpen?: (open: boolean) => void;
+  onVehicleExcelUpload?: (file: File) => void;
 }
 
-const VehicleConfig = ({ onAdd, onUpdate, onDelete, vehicles, onMapClickMode, onLocationUpdate, isDialogOpen, setIsDialogOpen }: VehicleConfigProps) => {
+const VehicleConfig = ({ onAdd, onUpdate, onDelete, vehicles, onMapClickMode, onLocationUpdate, isDialogOpen, setIsDialogOpen, onVehicleExcelUpload }: VehicleConfigProps) => {
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
   const [name, setName] = useState("");
   const [capacity, setCapacity] = useState("100");
@@ -297,16 +298,45 @@ const VehicleConfig = ({ onAdd, onUpdate, onDelete, vehicles, onMapClickMode, on
               <Truck className="w-5 h-5" />
               Vehículos ({vehicles.length})
             </span>
-            <Button
-              onClick={() => {
-                setEditingVehicle(null);
-                setIsDialogOpen?.(true);
-              }}
-              size="sm"
-            >
-              <Plus className="w-4 h-4 mr-2" />
-              Agregar Vehículo
-            </Button>
+            <div className="flex gap-2">
+              {onVehicleExcelUpload && (
+                <label htmlFor="vehicle-excel-upload" className="cursor-pointer">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="cursor-pointer"
+                    onClick={() => document.getElementById("vehicle-excel-upload")?.click()}
+                  >
+                    <Upload className="w-4 h-4 mr-2" />
+                    Subir Excel
+                  </Button>
+                  <input
+                    id="vehicle-excel-upload"
+                    type="file"
+                    accept=".xlsx,.xls,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file && onVehicleExcelUpload) {
+                        onVehicleExcelUpload(file);
+                      }
+                      e.target.value = "";
+                    }}
+                    className="hidden"
+                  />
+                </label>
+              )}
+              <Button
+                onClick={() => {
+                  setEditingVehicle(null);
+                  setIsDialogOpen?.(true);
+                }}
+                size="sm"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                Agregar Vehículo
+              </Button>
+            </div>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">

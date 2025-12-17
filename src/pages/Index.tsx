@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
@@ -7,7 +7,8 @@ import Map from "@/components/Map";
 import PickupPointForm from "@/components/PickupPointForm";
 import VehicleConfig from "@/components/VehicleConfig";
 import PickupPointsList from "@/components/PickupPointsList";
-import { Play, MapPin, Truck, Route, MousePointerClick, ChevronDown, ChevronUp, Code, ArrowLeft, Plus, History, X, Upload, Trash2 } from "lucide-react";
+import { Play, MapPin, Truck, Route, MousePointerClick, ChevronDown, ChevronUp, Code, ArrowLeft, Plus, History, X, Upload, Trash2, Download } from "lucide-react";
+import * as XLSX from "xlsx";
 import { Loader2 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,6 +18,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 interface PickupPoint {
   id: string;
@@ -25,6 +37,7 @@ interface PickupPoint {
   latitude: number;
   longitude: number;
   quantity?: number;
+  person_id?: string;
 }
 
 interface Vehicle {
@@ -65,8 +78,33 @@ const Index = () => {
   const [isPickupPointDialogOpen, setIsPickupPointDialogOpen] = useState(false);
   const [isVehicleDialogOpen, setIsVehicleDialogOpen] = useState(false);
   const [isPreviousRunsDialogOpen, setIsPreviousRunsDialogOpen] = useState(false);
+  const [isDeleteAllPointsDialogOpen, setIsDeleteAllPointsDialogOpen] = useState(false);
   const [visibleRoutes, setVisibleRoutes] = useState<Set<number>>(new Set());
   const { toast } = useToast();
+
+  // Helper function to get valid route count (routes with duration > 0, one per vehicle)
+  const getValidRouteCount = useMemo(() => {
+    // Filter routes: only count routes with duration > 0
+    const validRoutes = routes.filter(route => {
+      const duration = route.route_data?.route_travel_duration || route.route_data?.route_duration || route.total_duration || 0;
+      return duration > 0;
+    });
+    
+    // Group by vehicle_id and keep only one route per vehicle
+    const seenVehicles = new Set<string | null>();
+    const uniqueRoutes = validRoutes.filter(route => {
+      const vehicleId = route.vehicle_id || route.route_data?.id || null;
+      if (vehicleId && seenVehicles.has(vehicleId)) {
+        return false;
+      }
+      if (vehicleId) {
+        seenVehicles.add(vehicleId);
+      }
+      return true;
+    });
+    
+    return uniqueRoutes.length;
+  }, [routes]);
 
   useEffect(() => {
     loadPickupPoints();
@@ -158,45 +196,193 @@ const Index = () => {
         throw new Error("Esta ejecución no tiene soluciones disponibles");
       }
       
-      // Process and save routes to database
-      const solution = solutions[0];
-      
       // Clear old routes
       await supabase
         .from("routes")
         .delete()
         .gte("created_at", "1970-01-01");
       
-      // Insert new routes
-      const routeInserts = [];
-      for (const vehicle of solution.vehicles || []) {
-        const originalVehicle = vehicles.find((v) => v.id === vehicle.id || `vehicle-${vehicles.indexOf(v)}` === vehicle.id);
-        
-        const routeData = {
-          vehicle_id: originalVehicle?.id || null,
-          route_data: vehicle,
-          total_distance: vehicle.route_travel_distance || 0,
-          total_duration: vehicle.route_travel_duration || vehicle.route_duration || 0
-        };
+      // Helper function to extract person_id from encoded stop ID
+      // Format: {point.id}__person_{person_id} or just {point.id}
+      const extractPersonIdFromStopId = (stopId: string): string | undefined => {
+        if (!stopId) return undefined;
+        const match = stopId.match(/__person_(.+)$/);
+        return match ? match[1] : undefined;
+      };
 
-        routeInserts.push(
-          supabase.from("routes").insert(routeData)
-        );
+      // Helper function to extract original point ID from encoded stop ID
+      const extractOriginalPointId = (stopId: string): string => {
+        if (!stopId) return stopId;
+        const index = stopId.indexOf('__person_');
+        return index > -1 ? stopId.substring(0, index) : stopId;
+      };
+
+        // Create mapping of original point IDs to person_ids for fallback
+        // Use global Map constructor explicitly to avoid conflict with Map component import
+        const MapConstructor = globalThis.Map || window.Map;
+        const pointIdToPersonMap = new MapConstructor<string, string>();
+      pickupPoints.forEach((point) => {
+        if (point.person_id) {
+          pointIdToPersonMap.set(point.id, point.person_id);
+        }
+      });
+
+      // Insert new routes - use only the FIRST solution and filter to one route per vehicle
+      const routeInserts = [];
+      let totalExpectedRoutes = 0;
+      
+      console.log(`Processing ${solutions.length} solution(s) from run data, using first solution only`);
+      
+      // Use only the first solution (solutions[0])
+      const solution = solutions[0];
+      if (!solution || !solution.vehicles || solution.vehicles.length === 0) {
+        throw new Error("La primera solución no tiene vehículos disponibles");
+      }
+      
+      const vehicleCount = (solution.vehicles || []).length;
+      console.log(`Processing ${vehicleCount} vehicle(s) from first solution`);
+      
+      // Track seen vehicles to ensure only one route per vehicle
+      const seenVehicles = new Set<string | null>();
+      
+      // Process vehicles from first solution, filtering to one per vehicle
+      for (let vehicleIndex = 0; vehicleIndex < solution.vehicles.length; vehicleIndex++) {
+        const vehicle = solution.vehicles[vehicleIndex];
+        
+        // Find the original vehicle to get its database ID - this ensures we use the correct vehicle_id
+        const originalVehicle = vehicles.find((v) => v.id === vehicle.id || `vehicle-${vehicles.indexOf(v)}` === vehicle.id);
+        // Use the database vehicle_id or create a unique identifier from vehicle.id or index
+        const vehicleIdentifier = originalVehicle?.id || vehicle.id || `vehicle-${vehicleIndex}`;
+        
+        // Skip if we've already processed a route for this vehicle
+        if (seenVehicles.has(vehicleIdentifier)) {
+          console.log(`Skipping duplicate vehicle ${vehicleIdentifier} (already processed)`);
+          continue;
+        }
+        
+        // Mark this vehicle as seen
+        seenVehicles.add(vehicleIdentifier);
+        totalExpectedRoutes++;
+          
+          // Extract person assignments from route stops
+          const personAssignments: string[] = [];
+          if (vehicle.route) {
+            vehicle.route.forEach((routeStop: any) => {
+              const stopId = routeStop.stop?.id;
+              if (!stopId) return;
+              
+              // Extract person_id from encoded stop ID
+              let personId = extractPersonIdFromStopId(stopId);
+              
+              // Fallback: try to get from original point ID mapping
+              if (!personId) {
+                const originalPointId = extractOriginalPointId(stopId);
+                personId = pointIdToPersonMap.get(originalPointId);
+              }
+              
+              if (personId) {
+                personAssignments.push(personId);
+              }
+            });
+          }
+          
+          const routeData = {
+            vehicle_id: originalVehicle?.id || null,
+            route_data: vehicle,
+            total_distance: vehicle.route_travel_distance || 0,
+            total_duration: vehicle.route_travel_duration || vehicle.route_duration || 0,
+            // Note: person_assignments column doesn't exist in the routes table
+            // If needed, this data can be stored in route_data JSON field
+          };
+
+          // Add error handling to each insert to see what's failing
+          routeInserts.push(
+            supabase.from("routes").insert(routeData).select().then(result => {
+              if (result.error) {
+                console.error(`Error inserting route for vehicle ${vehicle.id || vehicleIndex} (solution ${solutionIndex}):`, {
+                  message: result.error.message,
+                  details: result.error.details,
+                  hint: result.error.hint,
+                  code: result.error.code,
+                  routeDataSize: JSON.stringify(routeData).length,
+                  stopsCount: vehicle.route?.length || 0
+                });
+              }
+              return result;
+            }).catch(err => {
+              console.error(`Exception inserting route for vehicle ${vehicle.id || vehicleIndex}:`, err);
+              return { data: null, error: err };
+            })
+          );
       }
 
-      await Promise.all(routeInserts);
+      // Execute all inserts and capture errors
+      const insertResults = await Promise.allSettled(routeInserts);
+      const errors: any[] = [];
+      const successes: any[] = [];
       
-      // Reload routes from database
+      insertResults.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          console.error(`Route insert ${index} failed with rejection:`, result.reason);
+          const errorInfo = result.reason instanceof Error 
+            ? { message: result.reason.message, stack: result.reason.stack, name: result.reason.name }
+            : result.reason;
+          errors.push({ index, error: errorInfo });
+        } else {
+          const { data, error } = result.value;
+          if (error) {
+            console.error(`Route insert ${index} failed:`, error);
+            // Extract error details in a serializable way
+            const errorInfo = {
+              message: error.message,
+              details: error.details,
+              hint: error.hint,
+              code: error.code,
+              ...(error.response && {
+                status: error.response.status,
+                statusText: error.response.statusText,
+                data: error.response.data
+              })
+            };
+            errors.push({ index, error: errorInfo });
+          } else {
+            successes.push({ index, data });
+          }
+        }
+      });
+      
+      console.log(`Route inserts: ${successes.length} successful, ${errors.length} failed`);
+      if (errors.length > 0) {
+        console.error('Failed route inserts:', errors);
+        // Log first error details to understand what's wrong
+        if (errors[0]?.error) {
+          console.error('First error details:', errors[0].error);
+          // Try to stringify, but handle non-serializable properties
+          try {
+            console.error('First error details (JSON):', JSON.stringify(errors[0].error, null, 2));
+          } catch (e) {
+            console.error('Could not stringify error:', e);
+          }
+        }
+      }
+      
+      // Reload routes from database - load all routes that were just inserted
+      // Use the actual number of routes from all solutions, or a reasonable limit
+      const expectedRoutes = totalExpectedRoutes;
+      const routesToLoad = Math.max(expectedRoutes, vehicles.length, 100); // Higher limit to ensure all routes are loaded
       const { data: routesData, error: routesError } = await supabase
         .from("routes")
         .select("*")
         .order("created_at", { ascending: false })
-        .limit(vehicles.length || 10);
+        .limit(routesToLoad);
+      
+      console.log(`Loading routes: Expected ${expectedRoutes}, Loading up to ${routesToLoad}, Got ${routesData?.length || 0}`);
 
       if (routesError) {
         console.error("Error loading routes:", routesError);
       } else {
         const loadedRoutes = routesData || [];
+        console.log(`Setting ${loadedRoutes.length} routes. Route data:`, loadedRoutes.map(r => ({ id: r.id, vehicle_id: r.vehicle_id, has_route_data: !!r.route_data })));
         setRoutes(loadedRoutes);
         // Initialize all routes as visible
         setVisibleRoutes(new Set(loadedRoutes.map((_, index) => index)));
@@ -232,6 +418,685 @@ const Index = () => {
       .then(() => {
         console.log("Cleared routes for new run");
       });
+  };
+
+  // Convert hex color to KML ABGR format (Alpha, Blue, Green, Red)
+  const hexToKMLColor = (hex: string, opacity: number = 255): string => {
+    // Remove # if present
+    hex = hex.replace('#', '');
+    // Parse RGB
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+    // Convert to ABGR (Alpha, Blue, Green, Red)
+    return `${opacity.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${r.toString(16).padStart(2, '0')}`.toUpperCase();
+  };
+
+  const handleExportToKML = async () => {
+    if (!selectedRunData) {
+      toast({
+        title: "Error",
+        description: "No hay datos de optimización para exportar",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      const solutions = selectedRunData.output?.solutions || selectedRunData.solutions || [];
+      
+      if (solutions.length === 0) {
+        toast({
+          title: "Error",
+          description: "No hay soluciones disponibles para exportar",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Show loading toast
+      toast({
+        title: "Generando KML",
+        description: "Obteniendo rutas de Mapbox...",
+      });
+
+      // Mapbox token (same as in Map component)
+      const MAPBOX_TOKEN = "pk.eyJ1Ijoicm9kcmlnb2l2YW5mIiwiYSI6ImNtaHhoOHk4azAxNjcyanExb2E2dHl6OTMifQ.VO6hcKB-pIDvb8ZFFpLdfw";
+
+      // Color palette matching the map colors
+      const routeColors = [
+        "#26bc30", // Green
+        "#3b82f6", // Blue
+        "#f59e0b", // Amber
+        "#ef4444", // Red
+        "#8b5cf6", // Purple
+        "#ec4899", // Pink
+        "#06b6d4", // Cyan
+        "#84cc16", // Lime
+      ];
+
+      // Start building KML
+      let kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Optimización de Rutas - ${selectedRunId || 'N/A'}</name>
+    <description>Rutas generadas por NextMV con rutas de Mapbox</description>
+`;
+
+      // Add styles for each vehicle route
+      let globalRouteIndex = 0;
+      solutions.forEach((solution: any, solutionIndex: number) => {
+        const vehicles = solution.vehicles || [];
+        vehicles.forEach((vehicle: any, vehicleIndex: number) => {
+          const colorIndex = globalRouteIndex % routeColors.length;
+          const color = routeColors[colorIndex];
+          const kmlColor = hexToKMLColor(color, 200); // 200 opacity for routes
+          const kmlColorOpaque = hexToKMLColor(color, 255); // Full opacity for placemarks
+          
+          const styleId = `route-${solutionIndex}-${vehicleIndex}`;
+          kml += `    <Style id="${styleId}">
+      <LineStyle>
+        <color>${kmlColor}</color>
+        <width>4</width>
+      </LineStyle>
+      <PolyStyle>
+        <color>${kmlColorOpaque}</color>
+      </PolyStyle>
+    </Style>
+`;
+          globalRouteIndex++;
+        });
+      });
+
+      // Fetch Mapbox routes for all vehicles in parallel
+      const routePromises: Promise<{ solutionIndex: number; vehicleIndex: number; vehicle: any; geometry: any }>[] = [];
+      globalRouteIndex = 0;
+      
+      solutions.forEach((solution: any, solutionIndex: number) => {
+        const vehicles = solution.vehicles || [];
+        
+        vehicles.forEach((vehicle: any, vehicleIndex: number) => {
+          const route = vehicle.route || [];
+          
+          if (route.length >= 2) {
+            // Build waypoints for Mapbox Directions API
+            const coordinates: number[][] = [];
+            route.forEach((routeStop: any) => {
+              const location = routeStop.stop?.location;
+              if (location && location.lat && location.lon) {
+                coordinates.push([location.lon, location.lat]);
+              }
+            });
+
+            if (coordinates.length >= 2) {
+              const waypoints = coordinates.map(coord => `${coord[0]},${coord[1]}`).join(';');
+              const directionsUrl = `https://api.mapbox.com/directions/v5/mapbox/driving/${waypoints}?geometries=geojson&access_token=${MAPBOX_TOKEN}`;
+              
+              routePromises.push(
+                fetch(directionsUrl)
+                  .then(response => {
+                    if (!response.ok) {
+                      console.warn(`Mapbox API error for vehicle ${vehicle.id || vehicleIndex}: ${response.status} ${response.statusText}`);
+                      throw new Error(`Mapbox API error: ${response.status}`);
+                    }
+                    return response.json();
+                  })
+                  .then(data => {
+                    console.log(`Mapbox response for vehicle ${vehicle.id || vehicleIndex}:`, {
+                      code: data.code,
+                      hasRoutes: !!(data.routes && data.routes.length > 0),
+                      hasGeometry: !!(data.routes && data.routes[0] && data.routes[0].geometry),
+                      geometryType: data.routes?.[0]?.geometry?.type,
+                      coordCount: data.routes?.[0]?.geometry?.coordinates?.length
+                    });
+                    
+                    if (data.code === 'Ok' && data.routes && data.routes.length > 0 && data.routes[0].geometry) {
+                      const geometry = data.routes[0].geometry;
+                      // Ensure we have valid coordinates
+                      if (geometry.coordinates && geometry.coordinates.length > 0) {
+                        return {
+                          solutionIndex,
+                          vehicleIndex,
+                          vehicle,
+                          geometry: geometry
+                        };
+                      }
+                    }
+                    
+                    // Fallback to straight line
+                    console.warn(`Using fallback straight line for vehicle ${vehicle.id || vehicleIndex}`);
+                    return {
+                      solutionIndex,
+                      vehicleIndex,
+                      vehicle,
+                      geometry: {
+                        type: "LineString",
+                        coordinates: coordinates
+                      }
+                    };
+                  })
+                  .catch(error => {
+                    console.error(`Error fetching Mapbox route for vehicle ${vehicle.id || vehicleIndex}:`, error);
+                    // Fallback to straight line
+                    return {
+                      solutionIndex,
+                      vehicleIndex,
+                      vehicle,
+                      geometry: {
+                        type: "LineString",
+                        coordinates: coordinates
+                      }
+                    };
+                  })
+              );
+            } else {
+              // Not enough coordinates, use straight line
+              routePromises.push(Promise.resolve({
+                solutionIndex,
+                vehicleIndex,
+                vehicle,
+                geometry: {
+                  type: "LineString",
+                  coordinates: coordinates.length > 0 ? coordinates : []
+                }
+              }));
+            }
+          } else {
+            // Not enough stops, skip route line
+            routePromises.push(Promise.resolve({
+              solutionIndex,
+              vehicleIndex,
+              vehicle,
+              geometry: null
+            }));
+          }
+          
+          globalRouteIndex++;
+        });
+      });
+
+      // Wait for all Mapbox route fetches to complete
+      console.log(`Waiting for ${routePromises.length} Mapbox route fetches...`);
+      const routeData = await Promise.all(routePromises);
+      console.log(`Completed ${routeData.length} route fetches. Results:`, routeData.map(r => ({
+        solution: r.solutionIndex,
+        vehicle: r.vehicleIndex,
+        hasGeometry: !!r.geometry,
+        coordCount: r.geometry?.coordinates?.length || 0,
+        geometryType: r.geometry?.type
+      })));
+
+      // Helper functions to extract person_id (same as Excel export)
+      const extractPersonIdFromStopId = (stopId: string): string | undefined => {
+        if (!stopId) return undefined;
+        const match = stopId.match(/__person_(.+)$/);
+        return match ? match[1] : undefined;
+      };
+      
+      const MapConstructorForKML = globalThis.Map || window.Map;
+      const pointIdToPersonMapForKML = new MapConstructorForKML<string, string>();
+      pickupPoints.forEach((point) => {
+        if (point.person_id) {
+          pointIdToPersonMapForKML.set(point.id, point.person_id);
+        }
+      });
+      
+      const extractOriginalPointId = (stopId: string): string => {
+        if (!stopId) return stopId;
+        const index = stopId.indexOf('__person_');
+        return index > -1 ? stopId.substring(0, index) : stopId;
+      };
+
+      // Process all solutions and vehicles
+      globalRouteIndex = 0;
+      solutions.forEach((solution: any, solutionIndex: number) => {
+        const solutionVehicles = solution.vehicles || [];
+        
+        solutionVehicles.forEach((vehicle: any, vehicleIndex: number) => {
+          // Find the vehicle in the vehicles array to get the plate (name)
+          const vehicleInfo = vehicles.find(v => v.id === vehicle.id || `vehicle-${vehicles.indexOf(v)}` === vehicle.id);
+          const vehiclePlate = vehicleInfo?.name || vehicle.id || `Vehículo ${vehicleIndex + 1}`;
+          
+          const route = vehicle.route || [];
+          const routeInfo = routeData.find(r => r.solutionIndex === solutionIndex && r.vehicleIndex === vehicleIndex);
+          const styleId = `route-${solutionIndex}-${vehicleIndex}`;
+          
+          // Debug: Log route info
+          console.log(`Processing vehicle ${vehicle.id || vehicleIndex} (solution ${solutionIndex}, vehicle ${vehicleIndex}):`, {
+            hasRouteInfo: !!routeInfo,
+            hasGeometry: !!(routeInfo?.geometry),
+            coordCount: routeInfo?.geometry?.coordinates?.length || 0,
+            geometryType: routeInfo?.geometry?.type
+          });
+          
+          // Create folder for this vehicle route with plate
+          kml += `    <Folder>
+      <name>${vehiclePlate} - Solución ${solutionIndex + 1}</name>
+      <description>Ruta del vehículo ${vehiclePlate} (ID: ${vehicle.id || vehicleIndex + 1})</description>
+`;
+
+          // Create route path (LineString) using Mapbox geometry
+          if (routeInfo && routeInfo.geometry && routeInfo.geometry.coordinates && Array.isArray(routeInfo.geometry.coordinates) && routeInfo.geometry.coordinates.length > 0) {
+            // Convert GeoJSON coordinates (lon,lat) to KML format (lon,lat,altitude)
+            const geoJsonCoords = routeInfo.geometry.coordinates;
+            console.log(`Using Mapbox geometry for vehicle ${vehicle.id || vehicleIndex}: ${geoJsonCoords.length} coordinates, first:`, geoJsonCoords[0]);
+            
+            const kmlCoordinates = geoJsonCoords
+              .map((coord: number[]) => {
+                // Handle both [lon, lat] and [lon, lat, elevation] formats
+                const lon = coord[0];
+                const lat = coord[1];
+                const alt = coord.length > 2 ? coord[2] : 0;
+                // KML format: longitude,latitude,altitude (space-separated)
+                return `${lon},${lat},${alt}`;
+              })
+              .join(' ');
+
+            kml += `      <Placemark>
+        <name>Ruta ${vehiclePlate}</name>
+        <description>Ruta completa del vehículo ${vehiclePlate} (generada por Mapbox - ${geoJsonCoords.length} puntos)</description>
+        <styleUrl>#${styleId}</styleUrl>
+        <LineString>
+          <tessellate>1</tessellate>
+          <coordinates>${kmlCoordinates}</coordinates>
+        </LineString>
+      </Placemark>
+`;
+          } else {
+            console.warn(`No Mapbox geometry for vehicle ${vehicle.id || vehicleIndex}, routeInfo:`, routeInfo);
+            if (route.length > 0) {
+              // Fallback: use stop coordinates if Mapbox route not available
+              const coordinates: string[] = [];
+              route.forEach((routeStop: any) => {
+                const location = routeStop.stop?.location;
+                if (location && location.lat && location.lon) {
+                  coordinates.push(`${location.lon},${location.lat},0`);
+                }
+              });
+
+              if (coordinates.length > 0) {
+                kml += `      <Placemark>
+        <name>Ruta ${vehiclePlate}</name>
+        <description>Ruta completa del vehículo ${vehiclePlate} (línea recta - Mapbox no disponible)</description>
+        <styleUrl>#${styleId}</styleUrl>
+        <LineString>
+          <tessellate>1</tessellate>
+          <coordinates>${coordinates.join(' ')}</coordinates>
+        </LineString>
+      </Placemark>
+`;
+              }
+            }
+          }
+
+          // Create placemarks for each stop (always create these, regardless of route type)
+          if (route && route.length > 0) {
+            console.log(`Creating ${route.length} stop placemarks for vehicle ${vehicle.id || vehicleIndex}`);
+            route.forEach((routeStop: any, stopIndex: number) => {
+              const stop = routeStop.stop || {};
+              const location = stop.location;
+              
+              if (location && location.lat && location.lon) {
+                // Extract all person_ids from the original point (not just the one in stop ID)
+                // Stop ID only contains the first person_id, but the original point may have multiple (comma-separated)
+                let personIds = "";
+                const originalPointId = extractOriginalPointId(stop.id || '');
+                const originalPoint = pickupPoints.find(p => p.id === originalPointId);
+                
+                if (originalPoint?.person_id) {
+                  // Use all person_ids from the original point (may be comma-separated)
+                  personIds = originalPoint.person_id;
+                } else {
+                  // Fallback: try to extract from stop ID (only the first one)
+                  const personIdFromStopId = extractPersonIdFromStopId(stop.id || '');
+                  if (personIdFromStopId) {
+                    personIds = personIdFromStopId;
+                  } else {
+                    // Final fallback: check the map
+                    const personIdFromMap = pointIdToPersonMapForKML.get(originalPointId);
+                    if (personIdFromMap) {
+                      personIds = personIdFromMap;
+                    }
+                  }
+                }
+                
+                const stopType = stop.type || (stopIndex === 0 ? "Inicio" : stopIndex === route.length - 1 ? "Fin" : "Parada");
+                const stopName = `${vehiclePlate} - ${stopIndex + 1}`;
+                let stopDescription = `Tipo: ${stopType}\nOrden en ruta: ${stopIndex + 1}\nVehículo: ${vehiclePlate}`;
+                if (personIds) {
+                  // Show all person IDs (comma-separated if multiple)
+                  stopDescription += `\nID Persona(s): ${personIds}`;
+                }
+                
+                // Use different icons for start/end/stops
+                let iconUrl = "http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png";
+                if (stopIndex === 0) {
+                  iconUrl = "http://maps.google.com/mapfiles/kml/shapes/arrow.png"; // Start
+                } else if (stopIndex === route.length - 1) {
+                  iconUrl = "http://maps.google.com/mapfiles/kml/shapes/placemark_square.png"; // End
+                }
+
+                kml += `      <Placemark>
+        <name>${stopName}</name>
+        <description><![CDATA[${stopDescription}]]></description>
+        <styleUrl>#${styleId}</styleUrl>
+        <Point>
+          <coordinates>${location.lon},${location.lat},0</coordinates>
+        </Point>
+        <Style>
+          <IconStyle>
+            <Icon>
+              <href>${iconUrl}</href>
+            </Icon>
+            <scale>1.2</scale>
+          </IconStyle>
+          <LabelStyle>
+            <scale>0.8</scale>
+          </LabelStyle>
+        </Style>
+      </Placemark>
+`;
+              } else {
+                console.warn(`Stop ${stopIndex} for vehicle ${vehicle.id || vehicleIndex} has no valid location:`, location);
+              }
+            });
+          } else {
+            console.warn(`No route stops found for vehicle ${vehicle.id || vehicleIndex}`);
+          }
+
+          kml += `    </Folder>
+`;
+          globalRouteIndex++;
+        });
+      });
+
+      // Close KML
+      kml += `  </Document>
+</kml>`;
+
+      // Create blob and download
+      const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
+      const url = URL.createObjectURL(blob);
+      const timestamp = new Date().toISOString().split('T')[0];
+      const filename = `optimizacion_${selectedRunId || timestamp}_${timestamp}.kml`;
+      
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      toast({
+        title: "Exportación exitosa",
+        description: `Archivo KML ${filename} descargado correctamente`,
+      });
+    } catch (error) {
+      console.error("Error exporting to KML:", error);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "No se pudo exportar el archivo KML",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleExportToExcel = () => {
+    if (!selectedRunData) {
+      toast({
+        title: "Error",
+        description: "No hay datos de optimización para exportar",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      const solutions = selectedRunData.output?.solutions || selectedRunData.solutions || [];
+      
+      if (solutions.length === 0) {
+        toast({
+          title: "Error",
+          description: "No hay soluciones disponibles para exportar",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Create a new workbook
+      const workbook = XLSX.utils.book_new();
+
+      // ===== SUMMARY SHEET =====
+      let totalVehicles = 0;
+      let totalDistance = 0;
+      let totalDuration = 0;
+      let totalStops = 0;
+
+      const summaryData: any[] = [
+        ["Resumen de Optimización"],
+        [],
+        ["ID de Ejecución", selectedRunId || "N/A"],
+        ["Fecha", selectedRunData.metadata?.created_at || selectedRunData.created_at 
+          ? new Date(selectedRunData.metadata?.created_at || selectedRunData.created_at).toLocaleString('es-ES')
+          : "N/A"],
+        ["Estado", selectedRunData.metadata?.status || selectedRunData.status || "N/A"],
+        [],
+        ["Estadísticas"],
+      ];
+
+      // Process all solutions
+      solutions.forEach((solution: any, solutionIndex: number) => {
+        const vehicles = solution.vehicles || [];
+        totalVehicles += vehicles.length;
+
+        vehicles.forEach((vehicle: any) => {
+          const distance = vehicle.route_travel_distance || vehicle.route_distance || 0;
+          const duration = vehicle.route_travel_duration || vehicle.route_duration || 0;
+          const stops = vehicle.route || [];
+          
+          totalDistance += typeof distance === 'string' ? parseFloat(distance) : distance;
+          totalDuration += typeof duration === 'string' ? parseFloat(duration) : duration;
+          totalStops += stops.length;
+        });
+      });
+
+      summaryData.push(
+        ["Total de Soluciones", solutions.length],
+        ["Total de Vehículos", totalVehicles],
+        ["Total de Paradas", totalStops],
+        ["Distancia Total (km)", (totalDistance / 1000).toFixed(2)],
+        ["Duración Total (minutos)", (totalDuration / 60).toFixed(2)],
+      );
+
+      const summarySheet = XLSX.utils.aoa_to_sheet(summaryData);
+      XLSX.utils.book_append_sheet(workbook, summarySheet, "Resumen");
+
+      // Helper function to extract person_id from encoded stop ID (same as used elsewhere)
+      const extractPersonIdFromStopId = (stopId: string): string | undefined => {
+        if (!stopId) return undefined;
+        const match = stopId.match(/__person_(.+)$/);
+        return match ? match[1] : undefined;
+      };
+      
+      // Create mapping of original point IDs to person_ids for fallback
+      const MapConstructor = globalThis.Map || window.Map;
+      const pointIdToPersonMap = new MapConstructor<string, string>();
+      pickupPoints.forEach((point) => {
+        if (point.person_id) {
+          pointIdToPersonMap.set(point.id, point.person_id);
+        }
+      });
+      
+      // Helper function to extract original point ID from encoded stop ID
+      const extractOriginalPointId = (stopId: string): string => {
+        if (!stopId) return stopId;
+        const index = stopId.indexOf('__person_');
+        return index > -1 ? stopId.substring(0, index) : stopId;
+      };
+
+      // ===== ROUTES SHEET =====
+      const routesData: any[] = [
+        ["Solución", "Vehículo ID", "Placa", "Orden en Ruta", "Stop ID", "ID Persona", "Tipo", "Latitud", "Longitud", 
+         "Distancia Acumulada (km)", "Duración Acumulada (min)", "Distancia al Siguiente (km)", "Duración al Siguiente (min)"]
+      ];
+
+      solutions.forEach((solution: any, solutionIndex: number) => {
+        const solutionVehicles = solution.vehicles || [];
+        
+        solutionVehicles.forEach((vehicle: any) => {
+          // Find the vehicle in the vehicles array to get the plate (name)
+          const vehicleInfo = vehicles.find(v => v.id === vehicle.id || `vehicle-${vehicles.indexOf(v)}` === vehicle.id);
+          const vehiclePlate = vehicleInfo?.name || vehicle.id || "N/A";
+          
+          const route = vehicle.route || [];
+          let accumulatedDistance = 0;
+          let accumulatedDuration = 0;
+
+          route.forEach((routeStop: any, stopIndex: number) => {
+            const stop = routeStop.stop || {};
+            const location = stop.location || {};
+            
+            // Extract all person_ids from the original point
+            // Stop ID only contains the first person_id, but the original point may have multiple (comma-separated)
+            let personIds = "";
+            const originalPointId = extractOriginalPointId(stop.id || '');
+            const originalPoint = pickupPoints.find(p => p.id === originalPointId);
+            
+            if (originalPoint?.person_id) {
+              // Use all person_ids from the original point (may be comma-separated)
+              personIds = originalPoint.person_id;
+            } else {
+              // Fallback: try to extract from stop ID (only the first one)
+              const personIdFromStopId = extractPersonIdFromStopId(stop.id || '');
+              if (personIdFromStopId) {
+                personIds = personIdFromStopId;
+              } else {
+                // Final fallback: check the map
+                const personIdFromMap = pointIdToPersonMap.get(originalPointId);
+                if (personIdFromMap) {
+                  personIds = personIdFromMap;
+                }
+              }
+            }
+            
+            // Calculate distances/durations for the leg to this stop
+            const distance = routeStop.distance || routeStop.travel_distance || 0;
+            const duration = routeStop.duration || routeStop.travel_duration || 0;
+            const nextDistance = route[stopIndex + 1]?.distance || route[stopIndex + 1]?.travel_distance || 0;
+            const nextDuration = route[stopIndex + 1]?.duration || route[stopIndex + 1]?.travel_duration || 0;
+
+            const distanceNum = typeof distance === 'string' ? parseFloat(distance) || 0 : (distance || 0);
+            const durationNum = typeof duration === 'string' ? parseFloat(duration) || 0 : (duration || 0);
+            
+            // Accumulate distance/duration to show total traveled to reach this stop
+            accumulatedDistance += isNaN(distanceNum) ? 0 : distanceNum;
+            accumulatedDuration += isNaN(durationNum) ? 0 : durationNum;
+
+            const stopType = stop.type || (stopIndex === 0 ? "Inicio" : stopIndex === route.length - 1 ? "Fin" : "Parada");
+            
+            const nextDistanceNum = typeof nextDistance === 'string' ? (parseFloat(nextDistance) || 0) : (nextDistance || 0);
+            const nextDurationNum = typeof nextDuration === 'string' ? (parseFloat(nextDuration) || 0) : (nextDuration || 0);
+            
+            routesData.push([
+              solutionIndex + 1,
+              vehicle.id || "N/A",
+              vehiclePlate,
+              stopIndex + 1,
+              stop.id || "N/A",
+              personIds || "", // All person IDs (comma-separated if multiple)
+              stopType,
+              location.lat || "",
+              location.lon || "",
+              (accumulatedDistance / 1000).toFixed(3),
+              (accumulatedDuration / 60).toFixed(2),
+              nextDistanceNum > 0 ? (nextDistanceNum / 1000).toFixed(3) : "",
+              nextDurationNum > 0 ? (nextDurationNum / 60).toFixed(2) : "",
+            ]);
+          });
+
+          // Add vehicle summary row
+          const vehicleDistance = vehicle.route_travel_distance || vehicle.route_distance || 0;
+          const vehicleDuration = vehicle.route_travel_duration || vehicle.route_duration || 0;
+          routesData.push([
+            solutionIndex + 1,
+            vehicle.id || "N/A",
+            vehiclePlate,
+            "TOTAL",
+            "",
+            "",
+            `Total Vehículo: ${vehiclePlate}`,
+            "",
+            "",
+            ((typeof vehicleDistance === 'string' ? parseFloat(vehicleDistance) : vehicleDistance) / 1000).toFixed(3),
+            ((typeof vehicleDuration === 'string' ? parseFloat(vehicleDuration) : vehicleDuration) / 60).toFixed(2),
+            "",
+            "",
+          ]);
+          routesData.push([]); // Empty row for separation
+        });
+      });
+
+      const routesSheet = XLSX.utils.aoa_to_sheet(routesData);
+      XLSX.utils.book_append_sheet(workbook, routesSheet, "Rutas Detalladas");
+
+      // ===== VEHICLES SUMMARY SHEET =====
+      const vehiclesData: any[] = [
+        ["Solución", "Vehículo ID", "Placa", "Número de Paradas", "Distancia Total (km)", "Duración Total (min)", 
+         "Distancia Promedio por Parada (km)", "Duración Promedio por Parada (min)"]
+      ];
+
+      solutions.forEach((solution: any, solutionIndex: number) => {
+        const solutionVehicles = solution.vehicles || [];
+        
+        solutionVehicles.forEach((vehicle: any) => {
+          // Find the vehicle in the vehicles array to get the plate (name)
+          const vehicleInfo = vehicles.find(v => v.id === vehicle.id || `vehicle-${vehicles.indexOf(v)}` === vehicle.id);
+          const vehiclePlate = vehicleInfo?.name || vehicle.id || "N/A";
+          
+          const route = vehicle.route || [];
+          const numStops = route.length;
+          const distance = vehicle.route_travel_distance || vehicle.route_distance || 0;
+          const duration = vehicle.route_travel_duration || vehicle.route_duration || 0;
+          
+          const distanceNum = typeof distance === 'string' ? parseFloat(distance) : distance;
+          const durationNum = typeof duration === 'string' ? parseFloat(duration) : duration;
+          
+          vehiclesData.push([
+            solutionIndex + 1,
+            vehicle.id || "N/A",
+            vehiclePlate,
+            numStops,
+            (distanceNum / 1000).toFixed(3),
+            (durationNum / 60).toFixed(2),
+            numStops > 0 ? (distanceNum / 1000 / numStops).toFixed(3) : 0,
+            numStops > 0 ? (durationNum / 60 / numStops).toFixed(2) : 0,
+          ]);
+        });
+      });
+
+      const vehiclesSheet = XLSX.utils.aoa_to_sheet(vehiclesData);
+      XLSX.utils.book_append_sheet(workbook, vehiclesSheet, "Resumen Vehículos");
+
+      // Generate filename with timestamp
+      const timestamp = new Date().toISOString().split('T')[0];
+      const filename = `optimizacion_${selectedRunId || timestamp}_${timestamp}.xlsx`;
+
+      // Write the file
+      XLSX.writeFile(workbook, filename);
+
+      toast({
+        title: "Exportación exitosa",
+        description: `Archivo ${filename} descargado correctamente`,
+      });
+    } catch (error) {
+      console.error("Error exporting to Excel:", error);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "No se pudo exportar el archivo Excel",
+        variant: "destructive",
+      });
+    }
   };
 
   const loadPickupPoints = async () => {
@@ -369,6 +1234,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         latitude: updateData.latitude,
         longitude: updateData.longitude,
         quantity: quantity,
+        person_id: updateData.person_id,
       };
 
       // Update in localStorage
@@ -386,6 +1252,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
             latitude: updateData.latitude,
             longitude: updateData.longitude,
             quantity: quantity,
+            person_id: updateData.person_id,
           })
           .eq("id", editingPickupPoint.id);
       } catch (error) {
@@ -408,6 +1275,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         latitude: insertData.latitude,
         longitude: insertData.longitude,
         quantity: quantity,
+        person_id: insertData.person_id,
       };
 
       // Add to localStorage
@@ -425,6 +1293,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
             latitude: insertData.latitude,
             longitude: insertData.longitude,
             quantity: quantity,
+            person_id: insertData.person_id,
           }]);
       } catch (error) {
         console.warn("Supabase insert failed (using localStorage):", error);
@@ -450,11 +1319,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         title: "Info",
         description: "No hay puntos para eliminar",
       });
-      return;
-    }
-
-    // Confirm deletion
-    if (!confirm(`¿Estás seguro de que deseas eliminar todos los ${pickupPoints.length} puntos de recogida? Esta acción no se puede deshacer.`)) {
+      setIsDeleteAllPointsDialogOpen(false);
       return;
     }
 
@@ -486,6 +1351,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       setPickupPoints([]);
       setRoutes([]);
       setVisibleRoutes(new Set());
+      setIsDeleteAllPointsDialogOpen(false);
 
       toast({
         title: "Puntos eliminados",
@@ -493,6 +1359,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       });
     } catch (error) {
       console.error("Error deleting all pickup points:", error);
+      setIsDeleteAllPointsDialogOpen(false);
       toast({
         title: "Error",
         description: `No se pudieron eliminar los puntos: ${error instanceof Error ? error.message : "Error desconocido"}`,
@@ -549,6 +1416,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         latitude: number;
         longitude: number;
         quantity: number;
+        person_id?: string; // Store person_id(s) - comma-separated if multiple
       }
       
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -581,7 +1449,16 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
                  normalized === "qty" || normalized === "q" ||
                  normalized.includes("cantidad") || normalized.includes("quantity");
         }
-        );
+      );
+      const personIdKey = allKeys.find(
+        key => {
+          const normalized = key.toLowerCase().trim();
+          return normalized === "persona id" || normalized === "persona_id" || 
+                 normalized === "person id" || normalized === "person_id" ||
+                 normalized === "id persona" || normalized === "id_persona" ||
+                 normalized.includes("persona") && normalized.includes("id");
+        }
+      );
         
         if (!latitudeKey || !longitudeKey) {
         toast({
@@ -592,19 +1469,20 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         return;
       }
 
-      console.log("Columnas detectadas:", { latitudeKey, longitudeKey, quantityKey: quantityKey || "no encontrada" });
+      console.log("Columnas detectadas:", { latitudeKey, longitudeKey, quantityKey: quantityKey || "no encontrada", personIdKey: personIdKey || "no encontrada" });
       console.log(`Total de filas en Excel: ${jsonData.length}`);
 
       // STEP 1: Read and process ALL rows first, counting occurrences
       let processedRows = 0;
       let skippedRows = 0;
       
-      // Map to track occurrences: key -> { lat, lon, count, occurrences }
+      // Map to track occurrences: key -> { lat, lon, count, occurrences, person_ids }
       const occurrenceMap: Record<string, {
         latitude: number;
         longitude: number;
         count: number; // Number of times this coordinate appears
         occurrences: number[]; // Track each occurrence for debugging
+        person_ids: string[]; // Track person IDs at this location
       }> = {};
       
       for (const row of jsonData) {
@@ -652,11 +1530,18 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         // Convert to string with full precision to match exact duplicates
         const key = `${lat},${lon}`;
         
+        // Extract person_id if available
+        const personId = personIdKey ? String(rowData[personIdKey] || "").trim() : undefined;
+        
         if (occurrenceMap[key]) {
           // Increment count for duplicate coordinates
           const oldCount = occurrenceMap[key].count;
           occurrenceMap[key].count += 1;
           occurrenceMap[key].occurrences.push(occurrenceMap[key].count);
+          // Add person_id if available and not already in the list
+          if (personId && !occurrenceMap[key].person_ids.includes(personId)) {
+            occurrenceMap[key].person_ids.push(personId);
+          }
           processedRows++;
           console.log(`[DUPLICADO ENCONTRADO] Clave: ${key}, Cantidad anterior: ${oldCount}, Cantidad nueva: ${occurrenceMap[key].count}`);
         } else {
@@ -666,6 +1551,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
             longitude: lon, // Store original value
             count: 1, // Start with 1 occurrence
             occurrences: [1], // Track first occurrence
+            person_ids: personId ? [personId] : [], // Store person_id if available
           };
           processedRows++;
           if (processedRows <= 5 || processedRows % 100 === 0) {
@@ -701,6 +1587,9 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         latitude: item.latitude,
         longitude: item.longitude,
         quantity: item.count, // Quantity = number of times this coordinate appeared
+        person_id: item.person_ids.length > 0 
+          ? (item.person_ids.length === 1 ? item.person_ids[0] : item.person_ids.join(", "))
+          : undefined, // Store single person_id or comma-separated if multiple
       }));
       
       // Verify quantities are being set correctly
@@ -776,6 +1665,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           latitude: lat,
           longitude: lon,
           quantity: quantity, // This is the consolidated count
+          person_id: point.person_id, // Include person_id if available
         };
       });
 
@@ -831,6 +1721,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           latitude: lat,
           longitude: lon,
           quantity: quantity, // ALWAYS include quantity - it's the consolidated count
+          person_id: pointData.person_id, // Include person_id if available
         };
         
         if (quantity > 1) {
@@ -1018,6 +1909,192 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
     }
   };
 
+  const handleVehicleExcelUpload = async (file: File) => {
+    try {
+      // Dynamically import xlsx library
+      // @ts-ignore - xlsx types may not be available until package is installed
+      const XLSX = await import("xlsx").catch(() => {
+        throw new Error("xlsx module not found. Please install it: npm install xlsx");
+      });
+      
+      // Read the file
+      const arrayBuffer = await file.arrayBuffer();
+      const workbook = XLSX.read(arrayBuffer, { type: "array" });
+      
+      // Get the first sheet
+      const firstSheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[firstSheetName];
+      
+      // Convert to JSON
+      const jsonData = XLSX.utils.sheet_to_json(worksheet);
+      
+      if (!Array.isArray(jsonData) || jsonData.length === 0) {
+        toast({
+          title: "Error",
+          description: "El archivo Excel está vacío o no tiene formato válido",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Detect column names (case-insensitive, handles variations)
+      const firstRow = jsonData[0] as Record<string, any>;
+      const allKeys = Object.keys(firstRow);
+      
+      const placaKey = allKeys.find(
+        key => {
+          const normalized = key.toLowerCase().trim();
+          return normalized === "placa" || normalized.includes("placa");
+        }
+      );
+      const capacidadKey = allKeys.find(
+        key => {
+          const normalized = key.toLowerCase().trim();
+          return normalized === "capacidad" || normalized.includes("capacidad");
+        }
+      );
+      const distanciaKey = allKeys.find(
+        key => {
+          const normalized = key.toLowerCase().trim();
+          return normalized === "distancia máxima (km)" || 
+                 normalized === "distancia maxima (km)" ||
+                 normalized === "distancia máxima" ||
+                 normalized === "distancia maxima" ||
+                 normalized.includes("distancia") && normalized.includes("max");
+        }
+      );
+      
+      if (!placaKey || !capacidadKey || !distanciaKey) {
+        toast({
+          title: "Error",
+          description: `No se encontraron todas las columnas requeridas. Buscando: "Placa", "Capacidad", "Distancia máxima (km)". Columnas encontradas: ${allKeys.join(", ")}`,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Process vehicles
+      const vehiclesToInsert: Vehicle[] = [];
+      let processedCount = 0;
+      let skippedCount = 0;
+
+      for (const row of jsonData) {
+        const rowData = row as Record<string, any>;
+        
+        const placa = String(rowData[placaKey] || "").trim();
+        const capacidad = parseFloat(rowData[capacidadKey]);
+        const distanciaMax = parseFloat(rowData[distanciaKey]);
+        
+        // Validate data
+        if (!placa || isNaN(capacidad) || isNaN(distanciaMax)) {
+          console.warn("Invalid vehicle data in row:", rowData);
+          skippedCount++;
+          continue;
+        }
+        
+        if (capacidad <= 0 || distanciaMax <= 0) {
+          console.warn("Invalid vehicle values (must be > 0):", { placa, capacidad, distanciaMax });
+          skippedCount++;
+          continue;
+        }
+
+        vehiclesToInsert.push({
+          name: placa,
+          capacity: Math.floor(capacidad),
+          max_distance: distanciaMax,
+        });
+        processedCount++;
+      }
+
+      if (vehiclesToInsert.length === 0) {
+        toast({
+          title: "Error",
+          description: "No se encontraron vehículos válidos en el archivo",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Delete all existing vehicles first
+      try {
+        const { error: deleteError } = await supabase
+          .from("vehicles")
+          .delete()
+          .neq("id", "00000000-0000-0000-0000-000000000000");
+        
+        if (deleteError) {
+          console.warn("Error deleting existing vehicles:", deleteError);
+        }
+      } catch (error) {
+        console.warn("Error deleting vehicles (may not be available):", error);
+      }
+
+      // Insert new vehicles
+      try {
+        const { data: insertedData, error: insertError } = await supabase
+          .from("vehicles")
+          .insert(vehiclesToInsert)
+          .select();
+
+        if (insertError) {
+          console.error("Error inserting vehicles:", insertError);
+          // Still update state even if Supabase fails
+        } else {
+          console.log("Vehicles inserted into Supabase:", insertedData);
+        }
+      } catch (error) {
+        console.warn("Supabase not available, using state only:", error);
+      }
+
+      // Update state
+      setVehicles(vehiclesToInsert);
+
+      toast({
+        title: "Archivo cargado exitosamente",
+        description: `Se agregaron ${processedCount} vehículos${skippedCount > 0 ? ` (${skippedCount} filas omitidas)` : ""}`,
+      });
+    } catch (error) {
+      console.error("Error processing vehicle Excel file:", error);
+      const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+      
+      if (errorMessage.includes("xlsx") || errorMessage.includes("Cannot find module")) {
+        toast({
+          title: "Error",
+          description: "La librería xlsx no está instalada. Por favor ejecuta: npm install xlsx",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Error",
+          description: `No se pudo procesar el archivo Excel: ${errorMessage}`,
+          variant: "destructive",
+        });
+      }
+    }
+  };
+
+  const handleVehicleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      // Check if it's an Excel file
+      const validExtensions = [".xlsx", ".xls", ".xlsm"];
+      const fileExtension = "." + file.name.split(".").pop()?.toLowerCase();
+      
+      if (!validExtensions.includes(fileExtension)) {
+        toast({
+          title: "Error",
+          description: "Por favor selecciona un archivo Excel (.xlsx, .xls, .xlsm)",
+          variant: "destructive",
+        });
+        return;
+      }
+      
+      handleVehicleExcelUpload(file);
+      // Reset input
+      e.target.value = "";
+    }
+  };
+
   const handleMapClick = async (lng: number, lat: number) => {
     // Handle vehicle location selection
     if (vehicleLocationMode && vehicleLocationCallback) {
@@ -1098,7 +2175,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       }
 
       toast({
-        title: "Point removed",
+        title: "Punto eliminado",
         description: "El punto de recogida ha sido eliminado exitosamente",
       });
     } catch (error) {
@@ -1216,9 +2293,10 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         defaults: {
           vehicles: {
             speed: Number(10), // Speed in m/s (10 m/s = 36 km/h)
-            capacity: Number(20),
-            start_time: "2025-01-01T08:00:00Z",
-            end_time: "2025-01-01T18:00:00Z"
+            capacity: Number(50),
+            max_distance: Number(100000), // 100 km in meters
+            start_time: "2025-01-01T06:00:00Z",
+            end_time: "2025-01-01T22:00:00Z"
           }
         },
         stops: pickupPoints.map((point, index) => {
@@ -1234,8 +2312,18 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           const frontendQuantity = point.quantity !== undefined ? point.quantity : 1;
           const nextmvQuantity = -Math.abs(Number(frontendQuantity)); // Always negative for Nextmv
           
+          // Encode person_id in the stop ID if available
+          // Format: {point.id}__person_{person_id} or just {point.id} if no person_id
+          // If multiple person_ids (comma-separated), use the first one
+          let stopId = String(point.id || `stop-${index}`);
+          if (point.person_id) {
+            // If comma-separated, take the first person_id
+            const firstPersonId = point.person_id.split(',')[0].trim();
+            stopId = `${stopId}__person_${firstPersonId}`;
+          }
+          
           return {
-            id: String(point.id || `stop-${index}`),
+            id: stopId,
             location: {
               lon: Number(lon),
               lat: Number(lat)
@@ -1762,9 +2850,15 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         throw new Error("No se encontraron soluciones para las rutas");
       }
 
+      // Get the first solution (defined outside try block so it's accessible later)
+      const solution = solutions[0];
+      
+      if (!solution || !solution.vehicles) {
+        throw new Error("La solución no contiene vehículos válidos");
+      }
+
       // Save routes to Supabase database
       try {
-        const solution = solutions[0];
         
         // Clear old routes before inserting new ones
         await supabase
@@ -1772,57 +2866,169 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           .delete()
           .gte("created_at", "1970-01-01");
         
+        // Helper function to extract person_id from encoded stop ID
+        // Format: {point.id}__person_{person_id} or just {point.id}
+        const extractPersonIdFromStopId = (stopId: string): string | undefined => {
+          if (!stopId) return undefined;
+          const match = stopId.match(/__person_(.+)$/);
+          return match ? match[1] : undefined;
+        };
+
+        // Helper function to extract original point ID from encoded stop ID
+        const extractOriginalPointId = (stopId: string): string => {
+          if (!stopId) return stopId;
+          const index = stopId.indexOf('__person_');
+          return index > -1 ? stopId.substring(0, index) : stopId;
+        };
+
+        // Create mapping of original point IDs to person_ids for fallback
+        // Use global Map constructor explicitly to avoid conflict with Map component import
+        const MapConstructor = globalThis.Map || window.Map;
+        const pointIdToPersonMap = new MapConstructor<string, string>();
+        pickupPoints.forEach((point) => {
+          if (point.person_id) {
+            pointIdToPersonMap.set(point.id, point.person_id);
+          }
+        });
+
         // Insert new routes
         const routeInserts = [];
+        // Filter to one route per vehicle before inserting
+        const seenVehiclesForDb = new Set<string>();
         for (const vehicle of solution.vehicles || []) {
-          // Find the original vehicle by matching the id
+          // Find the original vehicle to get its ID - this ensures we use the database vehicle_id
           const originalVehicle = vehicles.find((v) => v.id === vehicle.id || `vehicle-${vehicles.indexOf(v)}` === vehicle.id);
+          // Use the database vehicle_id or create a unique identifier from vehicle.id or index
+          const vehicleIdentifier = originalVehicle?.id || vehicle.id || `vehicle-${solution.vehicles.indexOf(vehicle)}`;
+          
+          // Skip if we've already processed a route for this vehicle
+          if (seenVehiclesForDb.has(vehicleIdentifier)) {
+            console.log(`Skipping duplicate vehicle ${vehicleIdentifier} for database insert`);
+            continue;
+          }
+          
+          // Mark this vehicle as seen
+          seenVehiclesForDb.add(vehicleIdentifier);
+          
+          // originalVehicle is already declared above, reuse it
+          // Extract person assignments from route stops
+          const personAssignments: string[] = [];
+          if (vehicle.route) {
+            vehicle.route.forEach((routeStop: any) => {
+              const stopId = routeStop.stop?.id;
+              if (!stopId) return;
+              
+              // Extract person_id from encoded stop ID
+              let personId = extractPersonIdFromStopId(stopId);
+              
+              // Fallback: try to get from original point ID mapping
+              if (!personId) {
+                const originalPointId = extractOriginalPointId(stopId);
+                personId = pointIdToPersonMap.get(originalPointId);
+              }
+              
+              if (personId) {
+                personAssignments.push(personId);
+              }
+            });
+          }
           
           // Extract route information from the vehicle object
           const routeData = {
             vehicle_id: originalVehicle?.id || null,
             route_data: vehicle,
             total_distance: vehicle.route_travel_distance || 0,
-            total_duration: vehicle.route_travel_duration || vehicle.route_duration || 0
+            total_duration: vehicle.route_travel_duration || vehicle.route_duration || 0,
+            // Note: person_assignments column doesn't exist in the routes table
+            // If needed, this data can be stored in route_data JSON field
           };
 
           routeInserts.push(
-            supabase.from("routes").insert(routeData)
+            supabase.from("routes").insert(routeData).select()
           );
         }
 
+        console.log(`Attempting to insert ${routeInserts.length} routes...`);
         const insertResults = await Promise.all(routeInserts);
         const insertErrors = insertResults.filter((r: any) => r.error);
+        const successfulInserts = insertResults.filter((r: any) => !r.error && r.data);
+        
         if (insertErrors.length > 0) {
-          console.error("Error inserting routes:", insertErrors);
-        } else {
-          console.log("Routes saved to database successfully");
+          console.error(`Error inserting ${insertErrors.length} routes:`, insertErrors);
         }
+        
+        console.log(`Insert results: ${successfulInserts.length} successful, ${insertErrors.length} failed out of ${routeInserts.length} total`);
+        
+        // Log details of first few inserts for debugging
+        insertResults.slice(0, 5).forEach((result: any, index: number) => {
+          if (result.error) {
+            console.error(`Route ${index} insert failed:`, result.error);
+          } else if (result.data) {
+            console.log(`Route ${index} inserted successfully, got ${result.data.length} record(s)`);
+          }
+        });
       } catch (dbError) {
         console.error("Error saving routes to database:", dbError);
         // Don't throw - we still want to show the results even if saving fails
       }
+
+      // Immediately render routes from the solution data instead of waiting for database
+      // Filter to one route per vehicle (same logic as handleRunSelect)
+      const seenVehicles = new Set<string | null>();
+      const routesFromSolution = (solution.vehicles || [])
+        .filter((vehicle: any, index: number) => {
+          const vehicleId = vehicle.id || `vehicle-${index}`;
+          if (seenVehicles.has(vehicleId)) {
+            console.log(`Skipping duplicate vehicle ${vehicleId} in immediate render`);
+            return false;
+          }
+          seenVehicles.add(vehicleId);
+          return true;
+        })
+        .map((vehicle: any, filteredIndex: number) => {
+          // Find the original vehicle by matching the id
+          const originalVehicle = vehicles.find((v) => v.id === vehicle.id || `vehicle-${vehicles.indexOf(v)}` === vehicle.id);
+          
+          return {
+            id: `temp-${filteredIndex}-${Date.now()}`,
+            vehicle_id: originalVehicle?.id || null,
+            route_data: vehicle,
+            total_distance: vehicle.route_travel_distance || 0,
+            total_duration: vehicle.route_travel_duration || vehicle.route_duration || 0,
+            created_at: new Date().toISOString()
+          };
+        });
+
+      console.log(`Setting ${routesFromSolution.length} filtered routes from solution immediately (one per vehicle)`);
+      setRoutes(routesFromSolution);
+      // Initialize all routes as visible
+      setVisibleRoutes(new Set(routesFromSolution.map((_, index) => index)));
 
       toast({
         title: "Rutas optimizadas",
         description: "Las rutas han sido calculadas exitosamente",
       });
 
-      // Reload routes from database
-      const { data: routesData, error: routesError } = await supabase
-        .from("routes")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(vehicles.length || 10);
-
-      if (routesError) {
-        console.error("Error loading routes:", routesError);
-      } else {
-        const loadedRoutes = routesData || [];
-        setRoutes(loadedRoutes);
-        // Initialize all routes as visible
-        setVisibleRoutes(new Set(loadedRoutes.map((_, index) => index)));
-      }
+      // In the background, wait for database to commit, then reload routes from database
+      // This ensures we have the proper IDs and database records
+      setTimeout(async () => {
+        const expectedRoutes = (solution.vehicles || []).length;
+        const routesToLoad = Math.max(expectedRoutes * 2, vehicles.length * 2, 200);
+        
+        let { data: routesData, error: routesError } = await supabase
+          .from("routes")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(routesToLoad);
+        
+        console.log(`Loading routes from database: Expected ${expectedRoutes}, Got ${routesData?.length || 0}`);
+        
+        if (!routesError && routesData && routesData.length > 0) {
+          console.log(`Updating routes with database records. Route data:`, routesData.map(r => ({ id: r.id, vehicle_id: r.vehicle_id, has_route_data: !!r.route_data })));
+          setRoutes(routesData);
+          setVisibleRoutes(new Set(routesData.map((_, index) => index)));
+        }
+      }, 1000);
       
       // Reload runs list to include the new run
       await loadRuns();
@@ -1865,17 +3071,6 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
                 </div>
                 <div className="flex flex-col items-end gap-2">
                 <MapPin className="w-12 h-12 opacity-80" />
-                  {pickupPoints.length > 0 && (
-                    <Button
-                      onClick={handleDeleteAllPickupPoints}
-                      variant="destructive"
-                      size="sm"
-                      className="bg-destructive/20 hover:bg-destructive/30 text-destructive-foreground border border-destructive/50"
-                    >
-                      <Trash2 className="w-4 h-4 mr-1" />
-                      Eliminar Todos
-                    </Button>
-                  )}
                 </div>
               </div>
             </CardContent>
@@ -1898,56 +3093,36 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm opacity-90">Rutas Generadas</p>
-                  <p className="text-4xl font-bold">{routes.length}</p>
+                  <p className="text-4xl font-bold">
+                    {(() => {
+                      // Filter routes: only count routes with duration > 0 and one route per vehicle
+                      const validRoutes = routes.filter(route => {
+                        const duration = route.route_data?.route_travel_duration || route.route_data?.route_duration || route.total_duration || 0;
+                        return duration > 0;
+                      });
+                      
+                      // Group by vehicle_id and keep only one route per vehicle
+                      const seenVehicles = new Set<string | null>();
+                      const uniqueRoutes = validRoutes.filter(route => {
+                        const vehicleId = route.vehicle_id || route.route_data?.id || null;
+                        if (vehicleId && seenVehicles.has(vehicleId)) {
+                          return false;
+                        }
+                        if (vehicleId) {
+                          seenVehicles.add(vehicleId);
+                        }
+                        return true;
+                      });
+                      
+                      return uniqueRoutes.length;
+                    })()}
+                  </p>
                 </div>
                 <Route className="w-12 h-12 opacity-80" />
               </div>
             </CardContent>
           </Card>
         </div>
-
-        {/* Excel Upload Section - Prominent at the top */}
-        <Card className="mb-6 border-2 border-dashed border-primary/50 bg-primary/5">
-          <CardContent className="pt-6">
-            <div className="flex items-center justify-between">
-              <div className="flex-1">
-                <h3 className="text-lg font-semibold mb-2">Cargar Puntos desde Excel</h3>
-                <p className="text-sm text-muted-foreground">
-                  Sube un archivo Excel (.xlsx) con columnas de latitud y longitud. 
-                  Los puntos con las mismas coordenadas se consolidarán sumando sus cantidades.
-                </p>
-              </div>
-              <div className="ml-4 flex gap-2">
-                {pickupPoints.length > 0 && (
-                  <Button
-                    onClick={handleDeleteAllPickupPoints}
-                    variant="destructive"
-                    size="lg"
-                    className="bg-destructive hover:bg-destructive/90"
-                  >
-                    <Trash2 className="w-5 h-5 mr-2" />
-                    Eliminar Todos ({pickupPoints.length})
-                  </Button>
-                )}
-                <Button
-                  onClick={() => document.getElementById("excel-upload-main")?.click()}
-                  size="lg"
-                  className="bg-primary hover:bg-primary/90"
-                >
-                  <Upload className="w-5 h-5 mr-2" />
-                  Subir Archivo Excel
-                </Button>
-                <input
-                  id="excel-upload-main"
-                  type="file"
-                  accept=".xlsx,.xls,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-                  onChange={handleFileInputChange}
-                  className="hidden"
-                />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
 
         {/* Optimization Controls */}
         <Card className="mb-6">
@@ -1995,8 +3170,8 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           </CardContent>
         </Card>
 
-        {/* Nextmv JSON Section */}
-        {nextmvJson && (
+        {/* Temporarily hidden - Nextmv JSON Section */}
+        {/* {nextmvJson && (
           <Card className="mb-6">
             <CardHeader 
               className="cursor-pointer hover:bg-muted/50 transition-colors"
@@ -2035,7 +3210,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
               </CardContent>
             )}
           </Card>
-        )}
+        )} */}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="space-y-6">
@@ -2043,31 +3218,31 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
               <TabsList className="grid w-full grid-cols-2 mb-4">
                 <TabsTrigger value="pickup-points" className="flex items-center gap-2">
                   <MapPin className="w-4 h-4" />
-                  Pickup Points
+                  Puntos de Recogida
                 </TabsTrigger>
                 <TabsTrigger value="vehicles" className="flex items-center gap-2">
                   <Truck className="w-4 h-4" />
-                  Vehicles
+                  Vehículos
                 </TabsTrigger>
               </TabsList>
               <TabsContent value="pickup-points" className="space-y-6 mt-0">
                 <Card>
                   <CardHeader>
-                    <CardTitle className="flex items-center justify-between">
-                      <span className="flex items-center gap-2">
-                        <MapPin className="w-5 h-5" />
-                        Pickup Points
-                      </span>
-                      <div className="flex gap-2">
-                        <label htmlFor="excel-upload" className="cursor-pointer">
+                    <CardTitle className="flex items-center gap-2">
+                      <MapPin className="w-5 h-5" />
+                      Puntos de Recogida
+                    </CardTitle>
+                    <div className="flex flex-col gap-2 overflow-hidden" style={{ marginTop: '32px' }}>
+                      <div className="flex gap-2 flex-wrap">
+                        <label htmlFor="excel-upload" className="cursor-pointer flex-shrink-0">
                           <Button
                             type="button"
                             variant="outline"
                             size="sm"
-                            className="cursor-pointer"
+                            className="cursor-pointer px-3 whitespace-nowrap"
                             onClick={() => document.getElementById("excel-upload")?.click()}
                           >
-                            <Upload className="w-4 h-4 mr-2" />
+                            <Upload className="w-4 h-4 mr-1.5" />
                             Subir Excel
                           </Button>
                           <input
@@ -2084,12 +3259,44 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
                             setIsPickupPointDialogOpen(true);
                           }}
                           size="sm"
+                          className="px-3 whitespace-nowrap flex-shrink-0"
                         >
-                          <Plus className="w-4 h-4 mr-2" />
+                          <Plus className="w-4 h-4 mr-1.5" />
                           Agregar Punto
                         </Button>
                       </div>
-                    </CardTitle>
+                      {pickupPoints.length > 0 && (
+                        <AlertDialog open={isDeleteAllPointsDialogOpen} onOpenChange={setIsDeleteAllPointsDialogOpen}>
+                          <AlertDialogTrigger asChild>
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              className="px-3 whitespace-nowrap flex-shrink-0 w-fit"
+                            >
+                              <Trash2 className="w-4 h-4 mr-1.5" />
+                              Eliminar Todos
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>¿Eliminar todos los puntos?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                ¿Estás seguro de que deseas eliminar todos los {pickupPoints.length} puntos de recogida? Esta acción no se puede deshacer.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={handleDeleteAllPickupPoints}
+                                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              >
+                                Eliminar Todos
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      )}
+                    </div>
                   </CardHeader>
                   <CardContent>
                     <PickupPointsList 
@@ -2111,6 +3318,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
                   onLocationUpdate={handleVehicleLocationUpdate}
                   isDialogOpen={isVehicleDialogOpen}
                   setIsDialogOpen={setIsVehicleDialogOpen}
+                  onVehicleExcelUpload={handleVehicleExcelUpload}
                 />
               </TabsContent>
             </Tabs>
@@ -2203,7 +3411,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
                     </div>
                     <div>
                       <p className="text-muted-foreground text-xs">Rutas</p>
-                      <p className="text-lg font-bold">{routes.length}</p>
+                      <p className="text-lg font-bold">{getValidRouteCount}</p>
                     </div>
                   </div>
                   {(selectedRunData.metadata?.status || selectedRunData.status) && (
@@ -2222,6 +3430,26 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
                       </p>
                     </div>
                   )}
+                  <div className="pt-2 border-t space-y-2">
+                    <Button
+                      onClick={handleExportToExcel}
+                      variant="default"
+                      size="sm"
+                      className="w-full"
+                    >
+                      <Download className="w-4 h-4 mr-2" />
+                      Descargar Excel
+                    </Button>
+                    <Button
+                      onClick={handleExportToKML}
+                      variant="outline"
+                      size="sm"
+                      className="w-full"
+                    >
+                      <Download className="w-4 h-4 mr-2" />
+                      Descargar KML
+                    </Button>
+                  </div>
                 </CardContent>
               </Card>
             )}

@@ -6,8 +6,8 @@ import { Plus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface PickupPointFormProps {
-  onAdd: (point: { name: string; address: string; latitude: number; longitude: number; quantity?: number }) => Promise<void>;
-  editingPoint?: { id: string; name: string; address: string; latitude: number; longitude: number; quantity?: number } | null;
+  onAdd: (point: { name: string; address: string; latitude: number; longitude: number; quantity?: number; person_id?: string }) => Promise<void>;
+  editingPoint?: { id: string; name: string; address: string; latitude: number; longitude: number; quantity?: number; person_id?: string } | null;
   onCancelEdit?: () => void;
 }
 
@@ -17,6 +17,7 @@ const PickupPointForm = ({ onAdd, editingPoint, onCancelEdit }: PickupPointFormP
   const [latitude, setLatitude] = useState("");
   const [longitude, setLongitude] = useState("");
   const [quantity, setQuantity] = useState("1");
+  const [personId, setPersonId] = useState("");
   const { toast } = useToast();
 
   // Update form when editing point changes
@@ -32,12 +33,14 @@ const PickupPointForm = ({ onAdd, editingPoint, onCancelEdit }: PickupPointFormP
         ? editingPoint.quantity 
         : 1;
       setQuantity(qty.toString());
+      setPersonId(editingPoint.person_id || "");
     } else {
       setName("");
       setAddress("");
       setLatitude("");
       setLongitude("");
       setQuantity("1");
+      setPersonId("");
     }
   }, [editingPoint]);
 
@@ -71,6 +74,7 @@ const PickupPointForm = ({ onAdd, editingPoint, onCancelEdit }: PickupPointFormP
         latitude: parseFloat(latitude),
         longitude: parseFloat(longitude),
         quantity: quantityNum,
+        person_id: personId.trim() || undefined,
       });
 
       if (!editingPoint) {
@@ -79,6 +83,7 @@ const PickupPointForm = ({ onAdd, editingPoint, onCancelEdit }: PickupPointFormP
         setLatitude("");
         setLongitude("");
         setQuantity("1");
+        setPersonId("");
       }
 
       toast({
@@ -147,6 +152,18 @@ const PickupPointForm = ({ onAdd, editingPoint, onCancelEdit }: PickupPointFormP
               onChange={(e) => setQuantity(e.target.value)}
               placeholder="1"
             />
+          </div>
+          <div>
+            <Label htmlFor="person_id">ID Persona (Opcional)</Label>
+            <Input
+              id="person_id"
+              value={personId}
+              onChange={(e) => setPersonId(e.target.value)}
+              placeholder="Ej: PER-001"
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              Identificador único de la persona a recoger en este punto
+            </p>
           </div>
           <div className="flex gap-2">
             {editingPoint && onCancelEdit && (

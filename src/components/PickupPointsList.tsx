@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
+import React from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { MapPin, Trash2, Edit, ChevronLeft, ChevronRight } from "lucide-react";
+import { MapPin, Trash2, Edit } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -13,13 +13,6 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 interface PickupPoint {
   id: string;
@@ -28,6 +21,7 @@ interface PickupPoint {
   latitude: number;
   longitude: number;
   quantity?: number;
+  person_id?: string;
 }
 
 interface PickupPointsListProps {
@@ -38,23 +32,6 @@ interface PickupPointsListProps {
 }
 
 const PickupPointsList = ({ points, onRemove, onPointClick, onEdit }: PickupPointsListProps) => {
-  const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage, setItemsPerPage] = useState(10);
-
-  // Reset to last valid page when points change (e.g., after deletion)
-  useEffect(() => {
-    const totalPages = Math.ceil(points.length / itemsPerPage);
-    if (currentPage > totalPages && totalPages > 0) {
-      setCurrentPage(totalPages);
-    } else if (currentPage < 1 && points.length > 0) {
-      setCurrentPage(1);
-    }
-  }, [points.length, itemsPerPage, currentPage]);
-
-  const totalPages = Math.ceil(points.length / itemsPerPage);
-  const startIndex = (currentPage - 1) * itemsPerPage;
-  const endIndex = startIndex + itemsPerPage;
-  const paginatedPoints = points.slice(startIndex, endIndex);
 
   if (points.length === 0) {
     return (
@@ -62,57 +39,30 @@ const PickupPointsList = ({ points, onRemove, onPointClick, onEdit }: PickupPoin
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <MapPin className="w-5 h-5" />
-            Pickup Points ({points.length})
+            Puntos de Recogida ({points.length})
           </CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground text-center py-4">
-            No pickup points added yet. Click on the map to add points.
+            No hay puntos de recogida agregados. Haz clic en el mapa para agregar puntos.
           </p>
         </CardContent>
       </Card>
     );
   }
 
-  const handlePageChange = (page: number) => {
-    setCurrentPage(page);
-  };
-
-  const handleItemsPerPageChange = (value: string) => {
-    const newItemsPerPage = parseInt(value, 10);
-    setItemsPerPage(newItemsPerPage);
-    setCurrentPage(1); // Reset to first page when changing items per page
-  };
 
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle className="flex items-center gap-2">
-            <MapPin className="w-5 h-5" />
-            Pickup Points ({points.length})
-          </CardTitle>
-          {totalPages > 1 && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground">Por página:</span>
-              <Select value={itemsPerPage.toString()} onValueChange={handleItemsPerPageChange}>
-                <SelectTrigger className="w-20 h-8 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="10">10</SelectItem>
-                  <SelectItem value="20">20</SelectItem>
-                  <SelectItem value="50">50</SelectItem>
-                  <SelectItem value="100">100</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-        </div>
+        <CardTitle className="flex items-center gap-2">
+          <MapPin className="w-5 h-5" />
+          Puntos de Recogida ({points.length})
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="space-y-2 min-h-[200px]">
-          {paginatedPoints.map((point) => (
+        <div className="space-y-2 max-h-[300px] overflow-y-auto">
+          {points.map((point) => (
             <div
               key={point.id}
               className="p-3 bg-muted rounded-lg flex items-start justify-between gap-2 hover:bg-muted/80 transition-colors cursor-pointer"
@@ -123,9 +73,17 @@ const PickupPointsList = ({ points, onRemove, onPointClick, onEdit }: PickupPoin
                 <p className="text-xs text-muted-foreground mt-1">
                   {typeof point.latitude === 'number' ? point.latitude : String(point.latitude)}, {typeof point.longitude === 'number' ? point.longitude : String(point.longitude)}
                 </p>
-                <p className="text-xs font-semibold text-primary mt-1">
-                  Cantidad: {point.quantity !== undefined && point.quantity !== null ? point.quantity : 1}
-                </p>
+                <div className="flex gap-3 mt-1">
+                  <p className="text-xs font-semibold text-primary">
+                    Cantidad: {point.quantity !== undefined && point.quantity !== null ? point.quantity : 1}
+                  </p>
+                  {/* Temporarily hidden - persona ID display */}
+                  {/* {point.person_id && (
+                    <p className="text-xs font-semibold text-blue-600">
+                      ID Persona: {point.person_id}
+                    </p>
+                  )} */}
+                </div>
               </div>
               <div className="flex gap-1 flex-shrink-0">
                 {onEdit && (
@@ -154,18 +112,18 @@ const PickupPointsList = ({ points, onRemove, onPointClick, onEdit }: PickupPoin
                   </AlertDialogTrigger>
                   <AlertDialogContent>
                     <AlertDialogHeader>
-                      <AlertDialogTitle>Remove pickup point?</AlertDialogTitle>
+                      <AlertDialogTitle>¿Eliminar punto de recogida?</AlertDialogTitle>
                       <AlertDialogDescription>
-                        Are you sure you want to remove "{point.name}"? This action cannot be undone.
+                        ¿Estás seguro de que deseas eliminar "{point.name}"? Esta acción no se puede deshacer.
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogCancel>Cancelar</AlertDialogCancel>
                       <AlertDialogAction
                         onClick={() => onRemove(point.id)}
                         className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                       >
-                        Remove
+                        Eliminar
                       </AlertDialogAction>
                     </AlertDialogFooter>
                   </AlertDialogContent>
@@ -175,69 +133,6 @@ const PickupPointsList = ({ points, onRemove, onPointClick, onEdit }: PickupPoin
           ))}
         </div>
 
-        {totalPages > 1 && (
-          <div className="flex items-center justify-between pt-2 border-t">
-            <div className="text-xs text-muted-foreground">
-              Mostrando {startIndex + 1} - {Math.min(endIndex, points.length)} de {points.length}
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handlePageChange(currentPage - 1)}
-                disabled={currentPage === 1}
-                className="h-8"
-              >
-                <ChevronLeft className="h-4 w-4 mr-1" />
-                Anterior
-              </Button>
-              
-              <div className="flex items-center gap-1">
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => {
-                  // Show first page, last page, current page, and pages around current
-                  if (
-                    page === 1 ||
-                    page === totalPages ||
-                    (page >= currentPage - 1 && page <= currentPage + 1)
-                  ) {
-                    return (
-                      <Button
-                        key={page}
-                        variant={currentPage === page ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => handlePageChange(page)}
-                        className="h-8 w-8 p-0"
-                      >
-                        {page}
-                      </Button>
-                    );
-                  } else if (
-                    page === currentPage - 2 ||
-                    page === currentPage + 2
-                  ) {
-                    return (
-                      <span key={page} className="px-1 text-muted-foreground">
-                        ...
-                      </span>
-                    );
-                  }
-                  return null;
-                })}
-              </div>
-
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handlePageChange(currentPage + 1)}
-                disabled={currentPage === totalPages}
-                className="h-8"
-              >
-                Siguiente
-                <ChevronRight className="h-4 w-4 ml-1" />
-              </Button>
-            </div>
-          </div>
-        )}
       </CardContent>
     </Card>
   );
