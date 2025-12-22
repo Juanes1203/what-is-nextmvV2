@@ -62,6 +62,40 @@ This project is built with:
 
 ## How can I deploy this project?
 
+### Deploy to GitHub Pages
+
+This project is configured to automatically deploy to GitHub Pages using GitHub Actions.
+
+**Initial Setup:**
+
+1. **Enable GitHub Pages in your repository:**
+   - Go to your repository on GitHub
+   - Click on **Settings** → **Pages**
+   - Under "Source", select **GitHub Actions** (not "Deploy from a branch")
+   - Save the settings
+
+2. **Push your code to GitHub:**
+   ```sh
+   git add .
+   git commit -m "Add GitHub Pages deployment"
+   git push origin main
+   ```
+
+3. **Wait for deployment:**
+   - Go to the **Actions** tab in your repository
+   - The workflow will automatically run and deploy your site
+   - Once complete, your site will be available at:
+     `https://<your-username>.github.io/<repository-name>/`
+
+**Automatic Deployments:**
+- Every push to the `main` branch will automatically trigger a new deployment
+- You can also manually trigger deployments from the Actions tab
+
+**Note:** If your repository name is different from `what-is-nextmv`, the GitHub Actions workflow will automatically use the correct repository name for the base path.
+
+### Deploy via Lovable
+
+Alternatively, you can deploy using Lovable:
 Simply open [Lovable](https://lovable.dev/projects/78f4098e-c2aa-43b9-96ba-83ac7bb596df) and click on Share -> Publish.
 
 ## Can I connect a custom domain to my Lovable project?
