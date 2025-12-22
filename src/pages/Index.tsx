@@ -104,6 +104,30 @@ const Index = () => {
     }
   };
 
+  // Helper function to get headers for Nextmv API requests
+  const getNextmvHeaders = (includeAuth: boolean = false): HeadersInit => {
+    const headers: HeadersInit = {
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+    };
+
+    if (import.meta.env.DEV) {
+      // In development, use Vite proxy which needs the API key
+      if (includeAuth) {
+        const NEXTMV_API_KEY = import.meta.env.VITE_NEXTMV_API_KEY || "nxmvv1_lhcoj3zDR:f5d1c365105ef511b4c47d67c6c13a729c2faecd36231d37dcdd2fcfffd03a6813235230";
+        headers["Authorization"] = `Bearer ${NEXTMV_API_KEY}`;
+      }
+    } else {
+      // In production, use Supabase function which needs the anon key
+      const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      if (supabaseKey) {
+        headers["apikey"] = supabaseKey;
+      }
+    }
+
+    return headers;
+  };
+
   // Helper function to get valid route count (routes with duration > 0, one per vehicle)
   const getValidRouteCount = useMemo(() => {
     // Filter routes: only count routes with duration > 0
@@ -144,16 +168,7 @@ const Index = () => {
       
       const response = await fetch(runsApiUrl, {
         method: "GET",
-        headers: {
-          ...(import.meta.env.DEV ? {
-            "Authorization": `Bearer ${NEXTMV_API_KEY}`,
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-          } : {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-          }),
-        },
+        headers: getNextmvHeaders(false),
       });
       
       if (!response.ok) {
@@ -198,16 +213,7 @@ const Index = () => {
       
       const response = await fetch(runApiUrl, {
         method: "GET",
-        headers: {
-          ...(import.meta.env.DEV ? {
-            "Authorization": `Bearer ${NEXTMV_API_KEY}`,
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-          } : {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-          }),
-        },
+        headers: getNextmvHeaders(false),
       });
       
       if (!response.ok) {
@@ -2632,16 +2638,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           
           response = await fetch(apiUrl, {
             method: "POST",
-            headers: {
-              ...(import.meta.env.DEV ? {
-                "Authorization": `Bearer ${NEXTMV_API_KEY}`,
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-              } : {
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-              }),
-            },
+            headers: getNextmvHeaders(true),
             body: requestBodyString,
             signal: controller.signal
           });
@@ -2899,16 +2896,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           try {
             const runResponse = await fetch(runApiUrl, {
               method: "GET",
-              headers: {
-                ...(import.meta.env.DEV ? {
-                  "Authorization": `Bearer ${NEXTMV_API_KEY}`,
-                  "Content-Type": "application/json",
-                  "Accept": "application/json",
-                } : {
-                  "Content-Type": "application/json",
-                  "Accept": "application/json",
-                }),
-              },
+              headers: getNextmvHeaders(false),
             });
             
             if (!runResponse.ok) {

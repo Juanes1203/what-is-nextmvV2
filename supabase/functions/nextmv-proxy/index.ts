@@ -10,28 +10,35 @@ const NEXTMV_API_BASE_URL = "https://api.cloud.nextmv.io";
 const NEXTMV_API_KEY = Deno.env.get("NEXTMV_API_KEY") || "nxmvv1_lhcoj3zDR:f5d1c365105ef511b4c47d67c6c13a729c2faecd36231d37dcdd2fcfffd03a6813235230";
 
 serve(async (req) => {
-  // Handle CORS preflight
+  // Handle CORS preflight - must return 200 OK
   if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, { 
+      status: 200,
+      headers: corsHeaders 
+    });
   }
 
   try {
     // Get the path from the request URL
-    // Expected format: /nextmv-proxy/v1/applications/...
+    // Supabase strips /functions/v1/nextmv-proxy, so pathname is just /v1/applications/...
     const url = new URL(req.url);
-    const pathMatch = url.pathname.match(/\/nextmv-proxy\/(.+)/);
+    let apiPath = url.pathname;
     
-    if (!pathMatch) {
+    // Remove leading slash if present
+    if (apiPath.startsWith("/")) {
+      apiPath = apiPath.slice(1);
+    }
+    
+    // If path is empty, return error
+    if (!apiPath) {
       return new Response(
-        JSON.stringify({ error: "Invalid proxy path. Expected format: /nextmv-proxy/v1/..." }),
+        JSON.stringify({ error: "Invalid proxy path. Expected format: /v1/applications/..." }),
         {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         }
       );
     }
-
-    const apiPath = pathMatch[1];
     const targetUrl = `${NEXTMV_API_BASE_URL}/${apiPath}`;
 
     // Forward query parameters
