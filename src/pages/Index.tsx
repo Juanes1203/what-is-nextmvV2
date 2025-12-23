@@ -1,8 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import Map from "@/components/Map";
@@ -82,51 +80,7 @@ const Index = () => {
   const [isPreviousRunsDialogOpen, setIsPreviousRunsDialogOpen] = useState(false);
   const [isDeleteAllPointsDialogOpen, setIsDeleteAllPointsDialogOpen] = useState(false);
   const [visibleRoutes, setVisibleRoutes] = useState<Set<number>>(new Set());
-  const [generalStartTime, setGeneralStartTime] = useState<string>("08:00");
   const { toast } = useToast();
-
-  // Helper function to get the Nextmv API URL (uses proxy in dev, Supabase function in production)
-  const getNextmvApiUrl = (apiPath: string): string => {
-    // Remove leading slash if present
-    const cleanPath = apiPath.startsWith("/") ? apiPath.slice(1) : apiPath;
-    
-    if (import.meta.env.DEV) {
-      // Use Vite proxy in development
-      return `/api/nextmv/${cleanPath}`;
-    } else {
-      // Use Supabase Edge Function proxy in production
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      if (supabaseUrl) {
-        return `${supabaseUrl}/functions/v1/nextmv-proxy/${cleanPath}`;
-      }
-      // Fallback to direct URL (will fail with CORS, but better than nothing)
-      return `https://api.cloud.nextmv.io/${cleanPath}`;
-    }
-  };
-
-  // Helper function to get headers for Nextmv API requests
-  const getNextmvHeaders = (includeAuth: boolean = false): HeadersInit => {
-    const headers: HeadersInit = {
-      "Content-Type": "application/json",
-      "Accept": "application/json",
-    };
-
-    if (import.meta.env.DEV) {
-      // In development, use Vite proxy which needs the API key
-      if (includeAuth) {
-        const NEXTMV_API_KEY = import.meta.env.VITE_NEXTMV_API_KEY || "nxmvv1_lhcoj3zDR:f5d1c365105ef511b4c47d67c6c13a729c2faecd36231d37dcdd2fcfffd03a6813235230";
-        headers["Authorization"] = `Bearer ${NEXTMV_API_KEY}`;
-      }
-    } else {
-      // In production, use Supabase function which needs the anon key
-      const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-      if (supabaseKey) {
-        headers["apikey"] = supabaseKey;
-      }
-    }
-
-    return headers;
-  };
 
   // Helper function to get valid route count (routes with duration > 0, one per vehicle)
   const getValidRouteCount = useMemo(() => {
@@ -164,11 +118,16 @@ const Index = () => {
       const NEXTMV_APPLICATION_ID = "workspace-dgxjzzgctd";
       const NEXTMV_API_KEY = import.meta.env.VITE_NEXTMV_API_KEY || "nxmvv1_lhcoj3zDR:f5d1c365105ef511b4c47d67c6c13a729c2faecd36231d37dcdd2fcfffd03a6813235230";
       
-      const runsApiUrl = getNextmvApiUrl(`v1/applications/${NEXTMV_APPLICATION_ID}/runs`);
+      const runsUrl = `https://api.cloud.nextmv.io/v1/applications/${NEXTMV_APPLICATION_ID}/runs`;
+      const runsApiUrl = import.meta.env.DEV ? `/api/nextmv/v1/applications/${NEXTMV_APPLICATION_ID}/runs` : runsUrl;
       
       const response = await fetch(runsApiUrl, {
         method: "GET",
-        headers: getNextmvHeaders(false),
+        headers: {
+          "Authorization": `Bearer ${NEXTMV_API_KEY}`,
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+        },
       });
       
       if (!response.ok) {
@@ -209,11 +168,16 @@ const Index = () => {
       const NEXTMV_APPLICATION_ID = "workspace-dgxjzzgctd";
       const NEXTMV_API_KEY = import.meta.env.VITE_NEXTMV_API_KEY || "nxmvv1_lhcoj3zDR:f5d1c365105ef511b4c47d67c6c13a729c2faecd36231d37dcdd2fcfffd03a6813235230";
       
-      const runApiUrl = getNextmvApiUrl(`v1/applications/${NEXTMV_APPLICATION_ID}/runs/${runId}`);
+      const runUrl = `https://api.cloud.nextmv.io/v1/applications/${NEXTMV_APPLICATION_ID}/runs/${runId}`;
+      const runApiUrl = import.meta.env.DEV ? `/api/nextmv/v1/applications/${NEXTMV_APPLICATION_ID}/runs/${runId}` : runUrl;
       
       const response = await fetch(runApiUrl, {
         method: "GET",
-        headers: getNextmvHeaders(false),
+        headers: {
+          "Authorization": `Bearer ${NEXTMV_API_KEY}`,
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+        },
       });
       
       if (!response.ok) {
@@ -971,30 +935,10 @@ const Index = () => {
         return index > -1 ? stopId.substring(0, index) : stopId;
       };
 
-      // Helper function to calculate arrival time
-      const calculateArrivalTime = (startTime: string, durationMinutes: number): string => {
-        try {
-          const [hours, minutes] = startTime.split(':').map(Number);
-          const startDate = new Date();
-          startDate.setHours(hours, minutes, 0, 0);
-          
-          // Add duration in minutes
-          const arrivalDate = new Date(startDate.getTime() + durationMinutes * 60 * 1000);
-          
-          // Format as HH:MM
-          const arrivalHours = arrivalDate.getHours().toString().padStart(2, '0');
-          const arrivalMinutes = arrivalDate.getMinutes().toString().padStart(2, '0');
-          return `${arrivalHours}:${arrivalMinutes}`;
-        } catch (error) {
-          console.error("Error calculating arrival time:", error);
-          return "";
-        }
-      };
-
       // ===== ROUTES SHEET =====
       const routesData: any[] = [
         ["Solución", "Vehículo ID", "Placa", "Orden en Ruta", "Stop ID", "ID Persona", "Tipo", "Latitud", "Longitud", 
-         "Distancia Acumulada (km)", "Duración Acumulada (min)", "Hora de Llegada", "Distancia al Siguiente (km)", "Duración al Siguiente (min)"]
+         "Distancia Acumulada (km)", "Duración Acumulada (min)", "Distancia al Siguiente (km)", "Duración al Siguiente (min)"]
       ];
 
       solutions.forEach((solution: any, solutionIndex: number) => {
@@ -1054,9 +998,6 @@ const Index = () => {
             const nextDistanceNum = typeof nextDistance === 'string' ? (parseFloat(nextDistance) || 0) : (nextDistance || 0);
             const nextDurationNum = typeof nextDuration === 'string' ? (parseFloat(nextDuration) || 0) : (nextDuration || 0);
             
-            // Calculate arrival time based on general start time and accumulated duration
-            const arrivalTime = calculateArrivalTime(generalStartTime, accumulatedDuration / 60);
-            
             routesData.push([
               solutionIndex + 1,
               vehicle.id || "N/A",
@@ -1069,7 +1010,6 @@ const Index = () => {
               location.lon || "",
               (accumulatedDistance / 1000).toFixed(3),
               (accumulatedDuration / 60).toFixed(2),
-              arrivalTime,
               nextDistanceNum > 0 ? (nextDistanceNum / 1000).toFixed(3) : "",
               nextDurationNum > 0 ? (nextDurationNum / 60).toFixed(2) : "",
             ]);
@@ -1090,7 +1030,6 @@ const Index = () => {
             "",
             ((typeof vehicleDistance === 'string' ? parseFloat(vehicleDistance) : vehicleDistance) / 1000).toFixed(3),
             ((typeof vehicleDuration === 'string' ? parseFloat(vehicleDuration) : vehicleDuration) / 60).toFixed(2),
-            "", // Empty arrival time for summary row
             "",
             "",
           ]);
@@ -2324,50 +2263,6 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
     });
   };
 
-  const handleDeleteAllVehicles = async () => {
-    if (vehicles.length === 0) {
-      toast({
-        title: "Info",
-        description: "No hay vehículos para eliminar",
-      });
-      return;
-    }
-
-    try {
-      // Delete all vehicles from Supabase
-      const { error } = await supabase
-        .from("vehicles")
-        .delete()
-        .neq("id", "00000000-0000-0000-0000-000000000000"); // Delete all
-
-      if (error) {
-        toast({
-          title: "Error",
-          description: "No se pudieron eliminar los vehículos",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      // Clear the state
-      setVehicles([]);
-      setRoutes([]);
-      setVisibleRoutes(new Set());
-
-      toast({
-        title: "Vehículos eliminados",
-        description: `Se eliminaron ${vehicles.length} vehículos exitosamente`,
-      });
-    } catch (error) {
-      console.error("Error deleting all vehicles:", error);
-      toast({
-        title: "Error",
-        description: `No se pudieron eliminar los vehículos: ${error instanceof Error ? error.message : "Error desconocido"}`,
-        variant: "destructive",
-      });
-    }
-  };
-
   const handleOptimizeRoutes = async () => {
     if (pickupPoints.length < 2) {
       toast({
@@ -2583,13 +2478,13 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
 
       // Store the JSON and endpoint to display (use cleaned version)
       setNextmvJson(cleanPayload);
-      const nextmvPath = "v1/applications/workspace-dgxjzzgctd/runs";
-      const nextmvFullUrl = "https://api.cloud.nextmv.io/" + nextmvPath; // Full URL for display
-      const nextmvApiUrl = getNextmvApiUrl(nextmvPath);
+      const nextmvPath = "/v1/applications/workspace-dgxjzzgctd/runs";
+      const nextmvEndpoint = "/api/nextmv" + nextmvPath; // Use proxy in development
+      const nextmvFullUrl = "https://api.cloud.nextmv.io" + nextmvPath; // Full URL for display
       setNextmvEndpoint(nextmvFullUrl);
       
       console.log("Calling Nextmv API:", {
-        endpoint: nextmvApiUrl,
+        endpoint: nextmvEndpoint,
         fullUrl: nextmvFullUrl,
         pickupPointsCount: pickupPoints.length,
         vehiclesCount: vehicles.length,
@@ -2614,8 +2509,8 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         }, 30000);
         
         try {
-          // Use proxy endpoint (works in both dev and production)
-          const apiUrl = nextmvApiUrl;
+          // Use proxy endpoint in development, direct URL in production (if CORS allows)
+          const apiUrl = import.meta.env.DEV ? nextmvEndpoint : nextmvFullUrl;
           
           // Convert to JSON string for the request
           const requestBodyString = JSON.stringify(cleanPayload);
@@ -2638,7 +2533,11 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           
           response = await fetch(apiUrl, {
             method: "POST",
-            headers: getNextmvHeaders(true),
+            headers: {
+              "Authorization": `Bearer ${NEXTMV_API_KEY}`,
+              "Content-Type": "application/json",
+              "Accept": "application/json",
+            },
             body: requestBodyString,
             signal: controller.signal
           });
@@ -2882,7 +2781,8 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         
         // Build the GET URL for the run
         const NEXTMV_APPLICATION_ID = "workspace-dgxjzzgctd";
-        const runApiUrl = getNextmvApiUrl(`v1/applications/${NEXTMV_APPLICATION_ID}/runs/${runId}`);
+        const runUrl = `https://api.cloud.nextmv.io/v1/applications/${NEXTMV_APPLICATION_ID}/runs/${runId}`;
+        const runApiUrl = import.meta.env.DEV ? `/api/nextmv/v1/applications/${NEXTMV_APPLICATION_ID}/runs/${runId}` : runUrl;
         
         // Poll for the result every 10 seconds until solution is available
         const pollInterval = 10000; // Poll every 10 seconds
@@ -2896,7 +2796,11 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           try {
             const runResponse = await fetch(runApiUrl, {
               method: "GET",
-              headers: getNextmvHeaders(false),
+              headers: {
+                "Authorization": `Bearer ${NEXTMV_API_KEY}`,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+              },
             });
             
             if (!runResponse.ok) {
@@ -3152,7 +3056,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
     <div className="min-h-screen bg-background">
       <header className="bg-primary text-primary-foreground p-4 shadow-md">
         <div className="container mx-auto flex items-center gap-2">
-          <img src="https://ontrack-global.s3.us-west-2.amazonaws.com/images/logo.png" alt="Logo" className="h-8 w-auto object-contain" />
+          <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" />
         </div>
       </header>
 
@@ -3262,25 +3166,6 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
                 {pickupPoints.length < 2 && "Necesitas al menos 2 puntos de recogida. "}
                 {vehicles.length === 0 && "Necesitas configurar al menos 1 vehículo."}
               </p>
-            )}
-            {(pickupPoints.length >= 2 && vehicles.length > 0) && (
-              <div className="space-y-4">
-                <div className="flex items-center gap-4">
-                  <Label htmlFor="start-time" className="text-sm font-medium whitespace-nowrap">
-                    Hora de Inicio General:
-                  </Label>
-                  <Input
-                    id="start-time"
-                    type="time"
-                    value={generalStartTime}
-                    onChange={(e) => setGeneralStartTime(e.target.value)}
-                    className="w-32"
-                  />
-                  <span className="text-xs text-muted-foreground">
-                    (Se usará para calcular las horas de llegada en el Excel)
-                  </span>
-                </div>
-              </div>
             )}
           </CardContent>
         </Card>
@@ -3427,8 +3312,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
                 <VehicleConfig 
                   onAdd={handleAddVehicle}
                   onUpdate={handleUpdateVehicle}
-                  onDelete={handleDeleteVehicle}
-                  onDeleteAll={handleDeleteAllVehicles}
+                  onDelete={handleDeleteVehicle} 
                   vehicles={vehicles}
                   onMapClickMode={handleVehicleLocationMapClick}
                   onLocationUpdate={handleVehicleLocationUpdate}

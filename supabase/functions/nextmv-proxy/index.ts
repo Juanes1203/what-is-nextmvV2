@@ -1,99 +1,58 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-url",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
 };
 
-const NEXTMV_API_BASE_URL = "https://api.cloud.nextmv.io";
-const NEXTMV_API_KEY = Deno.env.get("NEXTMV_API_KEY") || "nxmvv1_lhcoj3zDR:f5d1c365105ef511b4c47d67c6c13a729c2faecd36231d37dcdd2fcfffd03a6813235230";
+const NEXTMV_API_BASE = "https://api.cloud.nextmv.io";
+const NEXTMV_API_KEY =
+  Deno.env.get("NEXTMV_API_KEY") ||
+  "nxmvv1_lhcoj3zDR:f5d1c365105ef511b4c47d67c6c13a729c2faecd36231d37dcdd2fcfffd03a6813235230";
 
 serve(async (req) => {
-  // Handle CORS preflight - must return 200 OK
+  // Preflight handler for browsers
   if (req.method === "OPTIONS") {
-    return new Response(null, { 
-      status: 200,
-      headers: corsHeaders 
-    });
+    return new Response("ok", { headers: corsHeaders });
   }
 
   try {
-    // Get the path from the request URL
-    // Supabase strips /functions/v1/nextmv-proxy, so pathname is just /v1/applications/...
     const url = new URL(req.url);
-    let apiPath = url.pathname;
-    
-    // Remove leading slash if present
-    if (apiPath.startsWith("/")) {
-      apiPath = apiPath.slice(1);
-    }
-    
-    // If path is empty, return error
-    if (!apiPath) {
-      return new Response(
-        JSON.stringify({ error: "Invalid proxy path. Expected format: /v1/applications/..." }),
-        {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
-      );
-    }
-    const targetUrl = `${NEXTMV_API_BASE_URL}/${apiPath}`;
+    // Strip the function prefix to forward only the Nextmv path
+    const forwardedPath = url.pathname.replace(/^\/?nextmv-proxy/, "") || "/";
+    const targetUrl = `${NEXTMV_API_BASE}${forwardedPath}${url.search}`;
 
-    // Forward query parameters
-    const queryString = url.search;
-    const fullUrl = queryString ? `${targetUrl}${queryString}` : targetUrl;
+    const body =
+      req.method === "GET" || req.method === "HEAD" ? undefined : await req.arrayBuffer();
 
-    console.log(`Proxying ${req.method} request to: ${fullUrl}`);
+    // Forward original headers but override auth with the server-side key
+    const outgoingHeaders = new Headers(req.headers);
+    outgoingHeaders.set("Authorization", `Bearer ${NEXTMV_API_KEY}`);
+    outgoingHeaders.delete("host");
+    outgoingHeaders.delete("connection");
 
-    // Get request body if present
-    let body: string | undefined;
-    if (req.method === "POST" || req.method === "PUT" || req.method === "PATCH") {
-      try {
-        body = await req.text();
-      } catch (e) {
-        // No body or error reading body
-      }
-    }
-
-    // Forward the request to Nextmv API
-    const response = await fetch(fullUrl, {
+    const response = await fetch(targetUrl, {
       method: req.method,
-      headers: {
-        "Authorization": `Bearer ${NEXTMV_API_KEY}`,
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-      },
-      body: body,
+      headers: outgoingHeaders,
+      body,
     });
 
-    // Get response body
-    const responseText = await response.text();
-    
-    // Return the response with CORS headers
-    return new Response(responseText, {
+    // Copy response headers and apply CORS
+    const responseHeaders = new Headers(response.headers);
+    Object.entries(corsHeaders).forEach(([key, value]) => responseHeaders.set(key, value));
+
+    return new Response(response.body, {
       status: response.status,
-      statusText: response.statusText,
-      headers: {
-        ...corsHeaders,
-        "Content-Type": response.headers.get("Content-Type") || "application/json",
-      },
+      headers: responseHeaders,
     });
   } catch (error) {
-    console.error("Error in nextmv-proxy:", error);
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    
-    return new Response(
-      JSON.stringify({ 
-        error: errorMessage,
-        message: errorMessage,
-      }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
-    );
+    console.error("nextmv-proxy error:", error);
+    const message = error instanceof Error ? error.message : String(error);
+    return new Response(JSON.stringify({ error: message }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 });
 
