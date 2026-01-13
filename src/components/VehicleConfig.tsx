@@ -294,83 +294,82 @@ const VehicleConfig = ({ onAdd, onUpdate, onDelete, onDeleteAll, vehicles, onMap
     <>
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            <span className="flex items-center gap-2">
-              <Truck className="w-5 h-5" />
-              Vehículos ({vehicles.length})
-            </span>
-            <div className="flex gap-2">
-              {onVehicleExcelUpload && (
-                <label htmlFor="vehicle-excel-upload" className="cursor-pointer">
+          <CardTitle className="flex items-center gap-2">
+            <Truck className="w-5 h-5" />
+            Vehículos ({vehicles.length})
+          </CardTitle>
+          <div className="flex gap-2 flex-wrap overflow-hidden" style={{ marginTop: '32px' }}>
+            {onVehicleExcelUpload && (
+              <label htmlFor="vehicle-excel-upload" className="cursor-pointer flex-shrink-0">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="cursor-pointer px-3 whitespace-nowrap"
+                  onClick={() => document.getElementById("vehicle-excel-upload")?.click()}
+                >
+                  <Upload className="w-4 h-4 mr-1.5" />
+                  Subir Excel
+                </Button>
+                <input
+                  id="vehicle-excel-upload"
+                  type="file"
+                  accept=".xlsx,.xls,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file && onVehicleExcelUpload) {
+                      onVehicleExcelUpload(file);
+                    }
+                    e.target.value = "";
+                  }}
+                  className="hidden"
+                />
+              </label>
+            )}
+            <Button
+              onClick={() => {
+                setEditingVehicle(null);
+                setIsDialogOpen?.(true);
+              }}
+              size="sm"
+              className="px-3 whitespace-nowrap flex-shrink-0"
+            >
+              <Plus className="w-4 h-4 mr-1.5" />
+              Agregar Vehículo
+            </Button>
+            {onDeleteAll && vehicles.length > 0 && (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
                   <Button
                     type="button"
-                    variant="outline"
+                    variant="destructive"
                     size="sm"
-                    className="cursor-pointer"
-                    onClick={() => document.getElementById("vehicle-excel-upload")?.click()}
+                    className="px-3 whitespace-nowrap flex-shrink-0"
                   >
-                    <Upload className="w-4 h-4 mr-2" />
-                    Subir Excel
+                    <Trash2 className="w-4 h-4 mr-1.5" />
+                    Eliminar Todos
                   </Button>
-                  <input
-                    id="vehicle-excel-upload"
-                    type="file"
-                    accept=".xlsx,.xls,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file && onVehicleExcelUpload) {
-                        onVehicleExcelUpload(file);
-                      }
-                      e.target.value = "";
-                    }}
-                    className="hidden"
-                  />
-                </label>
-              )}
-              {onDeleteAll && vehicles.length > 0 && (
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      size="sm"
-                      className="px-3 whitespace-nowrap flex-shrink-0 w-fit"
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>¿Eliminar todos los vehículos?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      ¿Estás seguro de que deseas eliminar todos los {vehicles.length} vehículos? Esta acción no se puede deshacer.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={onDeleteAll}
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                     >
-                      <Trash2 className="w-4 h-4 mr-1.5" />
                       Eliminar Todos
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>¿Eliminar todos los vehículos?</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        ¿Estás seguro de que deseas eliminar todos los {vehicles.length} vehículos? Esta acción no se puede deshacer.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                      <AlertDialogAction
-                        onClick={onDeleteAll}
-                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                      >
-                        Eliminar Todos
-                      </AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-              )}
-              <Button
-                onClick={() => {
-                  setEditingVehicle(null);
-                  setIsDialogOpen?.(true);
-                }}
-                size="sm"
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                Agregar Vehículo
-              </Button>
-            </div>
-          </CardTitle>
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
           {vehicles.length > 0 ? (
@@ -386,47 +385,55 @@ const VehicleConfig = ({ onAdd, onUpdate, onDelete, onDeleteAll, vehicles, onMap
                       Capacidad: {vehicle.capacity} | Dist. máx: {vehicle.max_distance} km
                     </p>
                   </div>
-                  {vehicle.id && (
-                    <div className="flex gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => handleEditClick(vehicle)}
-                      >
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                  <div className="flex gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => handleEditClick(vehicle)}
+                    >
+                      <Edit className="h-4 w-4" />
+                    </Button>
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>¿Eliminar vehículo?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            ¿Estás seguro de que deseas eliminar el vehículo "{vehicle.name}"? 
+                            Esta acción no se puede deshacer.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={() => {
+                              if (vehicle.id) {
+                                onDelete(vehicle.id);
+                              } else {
+                                toast({
+                                  title: "Error",
+                                  description: "No se puede eliminar un vehículo sin ID",
+                                  variant: "destructive",
+                                });
+                              }
+                            }}
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
                           >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>¿Eliminar vehículo?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              ¿Estás seguro de que deseas eliminar el vehículo "{vehicle.name}"? 
-                              Esta acción no se puede deshacer.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                            <AlertDialogAction
-                              onClick={() => onDelete(vehicle.id!)}
-                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-                            >
-                              Eliminar
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-                    </div>
-                  )}
+                            Eliminar
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </div>
                 </div>
               ))}
             </div>

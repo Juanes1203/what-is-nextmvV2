@@ -38,11 +38,13 @@ interface MapProps {
   vehicleStartLocation?: { lon: number; lat: number } | null;
   vehicleEndLocation?: { lon: number; lat: number } | null;
   selectedRouteIndex?: number | null; // Index of the selected route to zoom to and highlight
+  focusLocation?: { lon: number; lat: number } | null; // Specific location to zoom to
+  zoomToRoute?: number | null; // Trigger to zoom to a specific route
 }
 
 const MAPBOX_TOKEN = "pk.eyJ1Ijoicm9kcmlnb2l2YW5mIiwiYSI6ImNtaHhoOHk4azAxNjcyanExb2E2dHl6OTMifQ.VO6hcKB-pIDvb8ZFFpLdfw";
 
-const Map = ({ pickupPoints, routes, vehicles = [], visibleRoutes, onRouteVisibilityChange, onMapClick, clickMode = false, focusedPoint, vehicleLocationMode, vehicleStartLocation, vehicleEndLocation, selectedRouteIndex }: MapProps) => {
+const Map = ({ pickupPoints, routes, vehicles = [], visibleRoutes, onRouteVisibilityChange, onMapClick, clickMode = false, focusedPoint, vehicleLocationMode, vehicleStartLocation, vehicleEndLocation, selectedRouteIndex, focusLocation, zoomToRoute }: MapProps) => {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<mapboxgl.Marker[]>([]);
@@ -158,33 +160,77 @@ const Map = ({ pickupPoints, routes, vehicles = [], visibleRoutes, onRouteVisibi
       return index > -1 ? stopId.substring(0, index) : stopId;
     };
 
-    // Build a map of stop IDs to their order in routes (starting from 1, excluding start/end)
+    // Build a map of stop IDs to their order in routes (starting from 0 for start, 1 for first stop)
     // Use Object.create(null) to avoid Map constructor conflict with component name
     const stopOrderMap: Record<string, number> = {};
-    // Build a map of stop IDs to route indices for coloring markers
+    // Build a map to track which points are start points
+    const stopIsStartPointMap: Record<string, boolean> = {};
+    // Build a map of stop IDs to route indices for coloring markers (use first route for color)
     const stopToRouteIndexMap: Record<string, number> = {};
+    // Build a map of stop IDs to all route indices that contain them (for filtering)
+    const stopToAllRouteIndicesMap: Record<string, Set<number>> = {};
+    // Build a map of stop IDs to their order in the selected route (if a route is selected)
+    const selectedRouteStopOrderMap: Record<string, number> = {};
+    
+    // If a route is selected, calculate stop order specifically for that route
+    if (selectedRouteIndex !== null && selectedRouteIndex !== undefined && routes[selectedRouteIndex]) {
+      const selectedRoute = routes[selectedRouteIndex];
+      const vehicleRoute = selectedRoute.route_data?.route || [];
+      let orderNumber = 1; // Start counting from 1 for actual stops (after start point)
+      
+      vehicleRoute.forEach((routeStop: any) => {
+        const stopId = routeStop.stop?.id;
+        if (!stopId || stopId.includes("-end")) return; // Skip end points
+        
+        const isStartPoint = stopId.includes("-start");
+        const originalPointId = extractOriginalPointId(stopId);
+        
+        if (isStartPoint) {
+          selectedRouteStopOrderMap[originalPointId] = 0;
+        } else {
+          selectedRouteStopOrderMap[originalPointId] = orderNumber;
+          orderNumber++;
+        }
+      });
+    }
+    
     if (routes.length > 0) {
       routes.forEach((route: any, routeIndex: number) => {
         const vehicleRoute = route.route_data?.route || [];
-        let orderNumber = 1; // Start counting from 1 for actual stops
+        let orderNumber = 1; // Start counting from 1 for actual stops (after start point)
         
         vehicleRoute.forEach((routeStop: any) => {
           const stopId = routeStop.stop?.id;
-          // Skip start/end location markers, only count actual pickup points
-          if (stopId && !stopId.includes("-start") && !stopId.includes("-end")) {
-            // Extract original point ID (in case stop ID is encoded with person_id)
-            const originalPointId = extractOriginalPointId(stopId);
-            
+          if (!stopId || stopId.includes("-end")) return; // Skip end points
+          
+          const isStartPoint = stopId.includes("-start");
+          // Extract original point ID (in case stop ID is encoded with person_id)
+          const originalPointId = extractOriginalPointId(stopId);
+          
+          // Track if this is a start point
+          if (isStartPoint) {
+            stopIsStartPointMap[originalPointId] = true;
+            // Start points have order 0
+            if (!(originalPointId in stopOrderMap)) {
+              stopOrderMap[originalPointId] = 0;
+            }
+          } else {
             // Use the minimum order if stop appears in multiple routes
             if (!(originalPointId in stopOrderMap) || stopOrderMap[originalPointId] > orderNumber) {
               stopOrderMap[originalPointId] = orderNumber;
             }
-            // Map stop ID to route index (use first route found if stop appears in multiple routes)
-            if (!(originalPointId in stopToRouteIndexMap)) {
-              stopToRouteIndexMap[originalPointId] = routeIndex;
-            }
             orderNumber++; // Increment for next stop
           }
+          
+          // Map stop ID to route index (use first route found if stop appears in multiple routes) - for coloring
+          if (!(originalPointId in stopToRouteIndexMap)) {
+            stopToRouteIndexMap[originalPointId] = routeIndex;
+          }
+          // Track all routes that contain this point (for filtering)
+          if (!stopToAllRouteIndicesMap[originalPointId]) {
+            stopToAllRouteIndicesMap[originalPointId] = new Set();
+          }
+          stopToAllRouteIndicesMap[originalPointId].add(routeIndex);
         });
       });
     }
@@ -242,15 +288,85 @@ const Map = ({ pickupPoints, routes, vehicles = [], visibleRoutes, onRouteVisibi
     ];
 
     // Add pickup point markers with order numbers and route colors
-    // Filter markers: if selectedRouteIndex is set, only show markers from that route
+    // Also add all stops from routes (start points and regular stops) that might not be in pickupPoints
+    const allPointsToShow = new Set<string>();
+    
+    // First, collect all points from pickupPoints
     pickupPoints.forEach((point) => {
-      const orderNumber = stopOrderMap[point.id];
-      const routeIndex = stopToRouteIndexMap[point.id];
+      allPointsToShow.add(point.id);
+    });
+    
+    // Then, collect all stops from routes (including start points and regular stops)
+    // This ensures markers are shown even if pickupPoints is empty or doesn't contain all stops
+    if (routes.length > 0) {
+      routes.forEach((route: any, routeIndex: number) => {
+        const vehicleRoute = route.route_data?.route || [];
+        vehicleRoute.forEach((routeStop: any) => {
+          const stopId = routeStop.stop?.id;
+          // Include all stops (start points and regular stops, but exclude end points)
+          if (stopId && !stopId.includes("-end") && routeStop.stop?.location) {
+            const originalPointId = extractOriginalPointId(stopId);
+            allPointsToShow.add(originalPointId);
+          }
+        });
+      });
+    }
+    
+    // Now create markers for all points (from pickupPoints and route start points)
+    allPointsToShow.forEach((pointId) => {
+      // Find the point in pickupPoints, or get location from route
+      let point: PickupPoint | null = pickupPoints.find(p => p.id === pointId) || null;
+      let pointLocation: { lon: number; lat: number } | null = null;
+      
+      if (point) {
+        pointLocation = { lon: point.longitude, lat: point.latitude };
+      } else {
+        // Try to find location from route stops (start points and regular stops)
+        if (routes.length > 0) {
+          for (const route of routes) {
+            const vehicleRoute = route.route_data?.route || [];
+            for (const routeStop of vehicleRoute) {
+              const stopId = routeStop.stop?.id;
+              // Check all stops (not just start points) to find the location
+              if (stopId && !stopId.includes("-end") && routeStop.stop?.location) {
+                const originalPointId = extractOriginalPointId(stopId);
+                if (originalPointId === pointId) {
+                  pointLocation = {
+                    lon: Number(routeStop.stop.location.lon),
+                    lat: Number(routeStop.stop.location.lat)
+                  };
+                  // Create a temporary point object for display
+                  const isStartPoint = stopId.includes("-start");
+                  point = {
+                    id: pointId,
+                    name: isStartPoint ? "Punto de inicio" : `Punto ${pointId}`,
+                    latitude: pointLocation.lat,
+                    longitude: pointLocation.lon
+                  };
+                  break;
+                }
+              }
+            }
+            if (pointLocation) break;
+          }
+        }
+      }
+      
+      if (!point || !pointLocation) return;
+      
+      // Use selected route order if available, otherwise use general order
+      const orderNumber = (selectedRouteIndex !== null && selectedRouteIndex !== undefined && selectedRouteStopOrderMap[pointId] !== undefined)
+        ? selectedRouteStopOrderMap[pointId]
+        : stopOrderMap[pointId];
+      const isStartPoint = stopIsStartPointMap[pointId] || false;
+      const routeIndex = stopToRouteIndexMap[pointId];
+      const allRouteIndices = stopToAllRouteIndicesMap[pointId];
       
       // Filter: if a route is selected, only show markers from that route
       if (selectedRouteIndex !== null && selectedRouteIndex !== undefined) {
-        if (routeIndex !== selectedRouteIndex) {
-          return; // Skip markers from other routes
+        // Check if the point belongs to the selected route
+        if (!allRouteIndices || !allRouteIndices.has(selectedRouteIndex)) {
+          return; // Skip markers that don't belong to the selected route
         }
       }
       
@@ -259,8 +375,14 @@ const Map = ({ pickupPoints, routes, vehicles = [], visibleRoutes, onRouteVisibi
       // Determine marker color: use route color if point belongs to a route, otherwise use primary color
       const markerColor = routeIndex !== undefined ? routeColors[routeIndex % routeColors.length] : undefined;
       
+      // Determine marker size based on number (larger for double digits)
+      const displayNumber = isStartPoint ? "S" : (orderNumber !== undefined ? String(orderNumber) : "📍");
+      const isDoubleDigit = orderNumber !== undefined && orderNumber > 9;
+      const markerSize = isDoubleDigit ? "w-12 h-12" : "w-10 h-10";
+      const textSize = isDoubleDigit ? "text-xs" : "text-sm";
+      
       // Set base classes
-      el.className = "w-10 h-10 rounded-full border-4 border-white shadow-lg flex items-center justify-center text-white font-bold text-sm";
+      el.className = `${markerSize} rounded-full border-4 border-white shadow-lg flex items-center justify-center text-white font-bold ${textSize}`;
       
       // Set background color: use inline style for route colors, or default to primary
       if (markerColor) {
@@ -270,21 +392,24 @@ const Map = ({ pickupPoints, routes, vehicles = [], visibleRoutes, onRouteVisibi
         el.classList.add("bg-primary");
       }
       
-      if (orderNumber !== undefined) {
+      if (isStartPoint) {
+        el.textContent = "S";
+      } else if (orderNumber !== undefined) {
         el.textContent = String(orderNumber);
       } else {
         el.textContent = "📍";
       }
 
       const marker = new mapboxgl.Marker(el)
-        .setLngLat([point.longitude, point.latitude])
+        .setLngLat([pointLocation.lon, pointLocation.lat])
         .setPopup(
           new mapboxgl.Popup({ offset: 25 }).setHTML(
             `<div class="p-2">
               <h3 class="font-bold">${point.name}</h3>
-              ${orderNumber !== undefined ? `<p class="text-sm font-semibold">Orden: ${orderNumber}</p>` : ''}
-              <p class="text-sm">${point.latitude}, ${point.longitude}</p>
+              ${isStartPoint ? `<p class="text-sm font-semibold">Punto de inicio</p>` : orderNumber !== undefined ? `<p class="text-sm font-semibold">Orden: ${orderNumber}</p>` : ''}
+              <p class="text-sm">${pointLocation.lat}, ${pointLocation.lon}</p>
               ${point.quantity !== undefined ? `<p class="text-sm">Cantidad: ${point.quantity}</p>` : ''}
+              ${isStartPoint ? `<p class="text-sm text-muted-foreground">Sin pasajeros</p>` : ''}
             </div>`
           )
         )
@@ -665,13 +790,39 @@ const Map = ({ pickupPoints, routes, vehicles = [], visibleRoutes, onRouteVisibi
 
     }
 
-    // Fit map to show all points (only if no point is focused and no route is selected)
-    if (pickupPoints.length > 0 && !focusedPoint && (selectedRouteIndex === null || selectedRouteIndex === undefined)) {
+    // Fit map to show all points or routes (only if no point is focused and no route is selected)
+    if (!focusedPoint && (selectedRouteIndex === null || selectedRouteIndex === undefined)) {
       const bounds = new mapboxgl.LngLatBounds();
-      pickupPoints.forEach((point) => {
-        bounds.extend([point.longitude, point.latitude]);
-      });
-      map.current!.fitBounds(bounds, { padding: 50 });
+      let hasBounds = false;
+      
+      // Add pickup points to bounds
+      if (pickupPoints.length > 0) {
+        pickupPoints.forEach((point) => {
+          bounds.extend([point.longitude, point.latitude]);
+          hasBounds = true;
+        });
+      }
+      
+      // Add all route stops to bounds (this ensures routes are visible even if pickupPoints is empty)
+      if (routes.length > 0) {
+        routes.forEach((route: any) => {
+          const vehicleRoute = route.route_data?.route || [];
+          vehicleRoute.forEach((routeStop: any) => {
+            if (routeStop.stop?.location?.lon && routeStop.stop?.location?.lat) {
+              const lon = Number(routeStop.stop.location.lon);
+              const lat = Number(routeStop.stop.location.lat);
+              if (isFinite(lon) && isFinite(lat)) {
+                bounds.extend([lon, lat]);
+                hasBounds = true;
+              }
+            }
+          });
+        });
+      }
+      
+      if (hasBounds) {
+        map.current!.fitBounds(bounds, { padding: 50 });
+      }
     }
     // NOTE: visibleRoutes and selectedRouteIndex are intentionally NOT in dependencies - we only update visibility/zoom via separate useEffects below
   }, [pickupPoints, routes, mapLoaded, focusedPoint, vehicleStartLocation, vehicleEndLocation, selectedRouteIndex]);
@@ -806,6 +957,105 @@ const Map = ({ pickupPoints, routes, vehicles = [], visibleRoutes, onRouteVisibi
       clearTimeout(timeoutId2);
     };
   }, [selectedRouteIndex, mapLoaded, routes]);
+
+  // Focus on specific location when focusLocation changes
+  useEffect(() => {
+    if (!map.current || !mapLoaded || !focusLocation) return;
+
+    map.current.flyTo({
+      center: [focusLocation.lon, focusLocation.lat],
+      zoom: 15,
+      duration: 1000,
+    });
+  }, [focusLocation, mapLoaded]);
+
+  // Zoom to specific route when zoomToRoute changes
+  useEffect(() => {
+    if (!map.current || !mapLoaded || zoomToRoute === null || zoomToRoute === undefined || routes.length === 0) return;
+
+    const routeToZoom = routes[zoomToRoute];
+    if (!routeToZoom || !routeToZoom.route_data?.route) {
+      console.warn("Route to zoom not found or has no route_data:", zoomToRoute, routeToZoom);
+      return;
+    }
+
+    // Wait a bit for the route to be drawn, then calculate bounds
+    const zoomToRouteBounds = () => {
+      if (!map.current) return;
+
+      const bounds = new mapboxgl.LngLatBounds();
+      let hasValidBounds = false;
+
+      // Collect all coordinates from the route stops
+      const vehicleRoute = routeToZoom.route_data.route || [];
+      
+      vehicleRoute.forEach((routeStop: any) => {
+        if (routeStop.stop?.location?.lon && routeStop.stop?.location?.lat) {
+          const lon = Number(routeStop.stop.location.lon);
+          const lat = Number(routeStop.stop.location.lat);
+          if (isFinite(lon) && isFinite(lat)) {
+            bounds.extend([lon, lat]);
+            hasValidBounds = true;
+          }
+        }
+      });
+
+      // Also try to get coordinates from the route polyline if available
+      const sourceId = `route-${zoomToRoute}`;
+      try {
+        if (map.current.getSource(sourceId)) {
+          const source = map.current.getSource(sourceId) as mapboxgl.GeoJSONSource;
+          const sourceData = source.getData() as any;
+          if (sourceData && sourceData.geometry && sourceData.geometry.coordinates) {
+            const coords = sourceData.geometry.coordinates;
+            if (Array.isArray(coords)) {
+              coords.forEach((coord: number[]) => {
+                if (Array.isArray(coord) && coord.length >= 2) {
+                  const lon = Number(coord[0]);
+                  const lat = Number(coord[1]);
+                  if (isFinite(lon) && isFinite(lat)) {
+                    bounds.extend([lon, lat]);
+                    hasValidBounds = true;
+                  }
+                }
+              });
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("Could not get route polyline coordinates for zoom:", e);
+      }
+
+      if (hasValidBounds) {
+        try {
+          const sw = bounds.getSouthWest();
+          const ne = bounds.getNorthEast();
+          
+          if (sw && ne && sw.lng !== ne.lng && sw.lat !== ne.lat) {
+            map.current.fitBounds(bounds, {
+              padding: { top: 50, bottom: 50, left: 50, right: 50 },
+            });
+          }
+        } catch (e) {
+          console.error("Error zooming to route:", e);
+        }
+      }
+    };
+
+    // Try immediately, then retry after delays in case the route is still being drawn
+    zoomToRouteBounds();
+    const timeoutId1 = setTimeout(() => {
+      zoomToRouteBounds();
+    }, 300);
+    const timeoutId2 = setTimeout(() => {
+      zoomToRouteBounds();
+    }, 1000);
+
+    return () => {
+      clearTimeout(timeoutId1);
+      clearTimeout(timeoutId2);
+    };
+  }, [zoomToRoute, mapLoaded, routes]);
 
   // Update cursor when clickMode changes
   useEffect(() => {

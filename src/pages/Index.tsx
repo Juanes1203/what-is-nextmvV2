@@ -7,25 +7,22 @@ import Map from "@/components/Map";
 import PickupPointForm from "@/components/PickupPointForm";
 import VehicleConfig from "@/components/VehicleConfig";
 import PickupPointsList from "@/components/PickupPointsList";
-import { Play, MapPin, Truck, Route, MousePointerClick, ChevronDown, ChevronUp, Code, ArrowLeft, Plus, History, X, Upload, Trash2, Download, Settings, Menu } from "lucide-react";
+import Layout from "@/components/Layout";
+import { Play, MapPin, Truck, Route, MousePointerClick, ChevronDown, ChevronUp, Code, ArrowLeft, Plus, History, X, Upload, Trash2, Download, Settings, Menu, ZoomIn } from "lucide-react";
 import * as XLSX from "xlsx";
 import { Loader2 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -78,6 +75,11 @@ const Index = () => {
   const [nextmvJson, setNextmvJson] = useState<any>(null);
   const [nextmvEndpoint, setNextmvEndpoint] = useState<string | null>(null);
   const [showNextmvJson, setShowNextmvJson] = useState(false);
+  const [previewJsonDialogOpen, setPreviewJsonDialogOpen] = useState(false);
+  const [optimizationConfig, setOptimizationConfig] = useState({
+    travelType: "distance" as "distance" | "time",
+    solveDuration: "10s"
+  });
   const [runs, setRuns] = useState<any[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedRunData, setSelectedRunData] = useState<any | null>(null);
@@ -85,12 +87,26 @@ const Index = () => {
   const [isNewRunMode, setIsNewRunMode] = useState(false);
   const [isPickupPointDialogOpen, setIsPickupPointDialogOpen] = useState(false);
   const [isVehicleDialogOpen, setIsVehicleDialogOpen] = useState(false);
-  const [isPreviousRunsDialogOpen, setIsPreviousRunsDialogOpen] = useState(false);
   const [isDeleteAllPointsDialogOpen, setIsDeleteAllPointsDialogOpen] = useState(false);
   const [visibleRoutes, setVisibleRoutes] = useState<Set<number>>(new Set());
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [selectedRouteIndex, setSelectedRouteIndex] = useState<number | null>(null);
+  const [focusLocation, setFocusLocation] = useState<{ lon: number; lat: number } | null>(null);
+  const [zoomToRoute, setZoomToRoute] = useState<number | null>(null);
   const { toast } = useToast();
+
+  // Calculate total passengers from pickup points
+  const totalPassengers = useMemo(() => {
+    const personIds = new Set<string>();
+    pickupPoints.forEach((point) => {
+      if (point.person_id) {
+        // person_id might be comma-separated
+        const ids = point.person_id.split(',').map(id => id.trim()).filter(id => id);
+        ids.forEach(id => personIds.add(id));
+      }
+    });
+    return personIds.size;
+  }, [pickupPoints]);
 
   // Helper function to get valid route count (routes with duration > 0, one per vehicle)
   const getValidRouteCount = useMemo(() => {
@@ -121,6 +137,7 @@ const Index = () => {
     loadVehicles();
     loadRuns();
   }, []);
+
 
   const loadRuns = async () => {
     setIsLoadingRuns(true);
@@ -1974,6 +1991,40 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         }
       );
       
+      // Optional columns for start and end locations
+      const inicioLatKey = allKeys.find(
+        key => {
+          const normalized = key.toLowerCase().trim();
+          return normalized === "punto de inicio - latitud" ||
+                 normalized === "punto de inicio latitud" ||
+                 normalized.includes("inicio") && normalized.includes("latitud");
+        }
+      );
+      const inicioLonKey = allKeys.find(
+        key => {
+          const normalized = key.toLowerCase().trim();
+          return normalized === "punto de inicio - longitud" ||
+                 normalized === "punto de inicio longitud" ||
+                 normalized.includes("inicio") && normalized.includes("longitud");
+        }
+      );
+      const finLatKey = allKeys.find(
+        key => {
+          const normalized = key.toLowerCase().trim();
+          return normalized === "punto de fin - latitud" ||
+                 normalized === "punto de fin latitud" ||
+                 normalized.includes("fin") && normalized.includes("latitud");
+        }
+      );
+      const finLonKey = allKeys.find(
+        key => {
+          const normalized = key.toLowerCase().trim();
+          return normalized === "punto de fin - longitud" ||
+                 normalized === "punto de fin longitud" ||
+                 normalized.includes("fin") && normalized.includes("longitud");
+        }
+      );
+      
       if (!placaKey || !capacidadKey || !distanciaKey) {
         toast({
           title: "Error",
@@ -2008,11 +2059,51 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           continue;
         }
 
-        vehiclesToInsert.push({
+        // Parse optional start location
+        let startLocation: { lon: number; lat: number } | undefined = undefined;
+        if (inicioLatKey && inicioLonKey) {
+          const inicioLat = parseFloat(rowData[inicioLatKey]);
+          const inicioLon = parseFloat(rowData[inicioLonKey]);
+          if (!isNaN(inicioLat) && !isNaN(inicioLon) && 
+              inicioLat >= -90 && inicioLat <= 90 && 
+              inicioLon >= -180 && inicioLon <= 180) {
+            startLocation = {
+              lat: inicioLat,
+              lon: inicioLon,
+            };
+          }
+        }
+
+        // Parse optional end location
+        let endLocation: { lon: number; lat: number } | undefined = undefined;
+        if (finLatKey && finLonKey) {
+          const finLat = parseFloat(rowData[finLatKey]);
+          const finLon = parseFloat(rowData[finLonKey]);
+          if (!isNaN(finLat) && !isNaN(finLon) && 
+              finLat >= -90 && finLat <= 90 && 
+              finLon >= -180 && finLon <= 180) {
+            endLocation = {
+              lat: finLat,
+              lon: finLon,
+            };
+          }
+        }
+
+        const vehicle: Vehicle = {
           name: placa,
           capacity: Math.floor(capacidad),
           max_distance: distanciaMax,
-        });
+        };
+
+        // Add locations if provided
+        if (startLocation) {
+          vehicle.start_location = startLocation;
+        }
+        if (endLocation) {
+          vehicle.end_location = endLocation;
+        }
+
+        vehiclesToInsert.push(vehicle);
         processedCount++;
       }
 
@@ -2273,33 +2364,62 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
     });
   };
 
-  const handleOptimizeRoutes = async () => {
-    if (pickupPoints.length < 2) {
-      toast({
-        title: "Error",
-        description: "Necesitas al menos 2 puntos de recogida",
-        variant: "destructive",
-      });
-      return;
-    }
-
+  const handleDeleteAllVehicles = async () => {
     if (vehicles.length === 0) {
       toast({
-        title: "Error",
-        description: "Necesitas configurar al menos 1 vehículo",
-        variant: "destructive",
+        title: "Info",
+        description: "No hay vehículos para eliminar",
       });
       return;
     }
 
-    setIsOptimizing(true);
-    setIsNewRunMode(true);
-    setSelectedRunId(null);
-    setSelectedRunData(null);
     try {
-      // Build the JSON payload that will be sent to Nextmv
-      // Ensure all numeric values are explicitly numbers
-      const nextmvRequest = {
+      const { error } = await supabase
+        .from("vehicles")
+        .delete()
+        .neq("id", "00000000-0000-0000-0000-000000000000"); // Delete all
+
+      if (error) {
+        toast({
+          title: "Error",
+          description: "No se pudieron eliminar los vehículos",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const vehiclesCount = vehicles.length;
+      setVehicles([]);
+      
+      toast({
+        title: "Vehículos eliminados",
+        description: `Se eliminaron ${vehiclesCount} vehículos exitosamente`,
+      });
+    } catch (error) {
+      console.error("Error deleting vehicles:", error);
+      toast({
+        title: "Error",
+        description: "Ocurrió un error al eliminar los vehículos",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Build the JSON payload that will be sent to Nextmv (extracted for preview)
+  const buildNextmvPayload = (skipValidation = false) => {
+    if (!skipValidation) {
+      if (pickupPoints.length < 2) {
+        throw new Error("Necesitas al menos 2 puntos de recogida");
+      }
+
+      if (vehicles.length === 0) {
+        throw new Error("Necesitas configurar al menos 1 vehículo");
+      }
+    }
+
+    // Build the JSON payload that will be sent to Nextmv
+    // Ensure all numeric values are explicitly numbers
+    const nextmvRequest: any = {
         defaults: {
           vehicles: {
             speed: Number(10), // Speed in m/s (10 m/s = 36 km/h)
@@ -2314,9 +2434,13 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           const lon = Number(parseFloat(String(point.longitude)));
           const lat = Number(parseFloat(String(point.latitude)));
           
-          if (isNaN(lon) || isNaN(lat) || !isFinite(lon) || !isFinite(lat)) {
+          if (!skipValidation && (isNaN(lon) || isNaN(lat) || !isFinite(lon) || !isFinite(lat))) {
             throw new Error(`Invalid coordinates for point ${point.name || point.id}: longitude=${point.longitude}, latitude=${point.latitude}`);
           }
+          
+          // For preview, use default coordinates if invalid
+          const finalLon = (isNaN(lon) || !isFinite(lon)) ? 0 : lon;
+          const finalLat = (isNaN(lat) || !isFinite(lat)) ? 0 : lat;
           
           // Convert positive quantity from frontend to negative for Nextmv API
           const frontendQuantity = point.quantity !== undefined ? point.quantity : 1;
@@ -2335,13 +2459,13 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           return {
             id: stopId,
             location: {
-              lon: Number(lon),
-              lat: Number(lat)
+              lon: Number(finalLon),
+              lat: Number(finalLat)
             },
             quantity: nextmvQuantity // Negative value for Nextmv API
           };
         }),
-        vehicles: vehicles.map((vehicle, index) => {
+        vehicles: (vehicles.length > 0 ? vehicles : []).map((vehicle, index) => {
           // Get start location from vehicle config, first pickup point, or default
           let startLocation: { lon: number; lat: number };
           if (vehicle.start_location) {
@@ -2352,7 +2476,11 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
               lat: Number(parseFloat(String(pickupPoints[0].latitude)))
             };
           } else {
-            throw new Error("No valid start location available for vehicles");
+            // Use default location if no points available (for preview)
+            startLocation = {
+              lon: 0,
+              lat: 0
+            };
           }
           
           // Get end location from vehicle config or null
@@ -2367,12 +2495,14 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           const maxDistanceKm = Number(parseFloat(String(vehicle.max_distance))) || 100;
           const maxDistance = maxDistanceKm * 1000; // Convert km to meters
           
-          if (isNaN(capacity) || capacity <= 0 || !Number.isInteger(capacity)) {
-            throw new Error(`Invalid capacity for vehicle ${vehicle.name || vehicle.id}: ${vehicle.capacity}`);
-          }
-          
-          if (isNaN(maxDistance) || maxDistance <= 0 || !isFinite(maxDistance)) {
-            throw new Error(`Invalid max_distance for vehicle ${vehicle.name || vehicle.id}: ${vehicle.max_distance}`);
+          if (!skipValidation) {
+            if (isNaN(capacity) || capacity <= 0 || !Number.isInteger(capacity)) {
+              throw new Error(`Invalid capacity for vehicle ${vehicle.name || vehicle.id}: ${vehicle.capacity}`);
+            }
+            
+            if (isNaN(maxDistance) || maxDistance <= 0 || !isFinite(maxDistance)) {
+              throw new Error(`Invalid max_distance for vehicle ${vehicle.name || vehicle.id}: ${vehicle.max_distance}`);
+            }
           }
           
           const vehiclePayload: any = {
@@ -2399,10 +2529,10 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       };
 
       // Note: application_id is in the URL path, not in the payload
-      const nextmvPayload = {
+      const nextmvPayload: any = {
         input: nextmvRequest,
         options: {
-          "solve.duration": "10s"
+          "solve.duration": optimizationConfig.solveDuration
         }
       };
 
@@ -2449,8 +2579,11 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
                 const numValue = typeof value === 'string' ? parseInt(value, 10) : (typeof value === 'number' ? value : parseInt(String(value), 10));
                 result[key] = !isNaN(numValue) && isFinite(numValue) && Number.isInteger(numValue) ? Number(numValue) : 20;
               }
-            } else if (key === 'start_location' || key === 'location') {
+            } else if (key === 'start_location' || key === 'location' || key === 'config') {
               result[key] = validateAndFixTypes(value);
+            } else if (key === 'travel_type') {
+              // Preserve travel_type as string
+              result[key] = value;
             } else {
               result[key] = validateAndFixTypes(value);
             }
@@ -2465,6 +2598,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
 
       // Validate the payload structure
       console.log("Nextmv payload structure (before validation):", JSON.stringify(nextmvPayload, null, 2));
+      console.log("Optimization config:", optimizationConfig);
       console.log("Nextmv payload structure (after validation):", JSON.stringify(validatedPayload, null, 2));
       console.log("Payload validation:", {
         hasInput: !!validatedPayload.input,
@@ -2483,15 +2617,80 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         return value;
       }));
 
-      // Verify the cleaned payload
-      console.log("Cleaned payload (no undefined values):", JSON.stringify(cleanPayload, null, 2));
+    // Verify the cleaned payload
+    console.log("Cleaned payload (no undefined values):", JSON.stringify(cleanPayload, null, 2));
 
-      // Store the JSON and endpoint to display (use cleaned version)
+    // Store the JSON and endpoint to display (use cleaned version)
+    const nextmvPath = "/v1/applications/workspace-dgxjzzgctd/runs";
+    const nextmvEndpoint = "/api/nextmv" + nextmvPath; // Use proxy in development
+    const nextmvFullUrl = "https://api.cloud.nextmv.io" + nextmvPath; // Full URL for display
+
+    return {
+      payload: cleanPayload,
+      endpoint: nextmvFullUrl,
+    };
+  };
+
+  const handlePreviewJson = () => {
+    try {
+      // Skip validation for preview - allow preview even if data is incomplete
+      const { payload, endpoint } = buildNextmvPayload(true);
+      setNextmvJson(payload);
+      setNextmvEndpoint(endpoint);
+      setPreviewJsonDialogOpen(true);
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "No se pudo generar el JSON",
+        variant: "destructive",
+      });
+    }
+  };
+
+  // Keyboard shortcut for preview (Ctrl+Shift+P)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && e.key === 'P') {
+        e.preventDefault();
+        handlePreviewJson();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleOptimizeRoutes = async () => {
+    if (pickupPoints.length < 2) {
+      toast({
+        title: "Error",
+        description: "Necesitas al menos 2 puntos de recogida",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (vehicles.length === 0) {
+      toast({
+        title: "Error",
+        description: "Necesitas configurar al menos 1 vehículo",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsOptimizing(true);
+    setIsNewRunMode(true);
+    setSelectedRunId(null);
+    setSelectedRunData(null);
+    try {
+      // Build the JSON payload using the extracted function
+      const { payload: cleanPayload, endpoint: nextmvFullUrl } = buildNextmvPayload();
       setNextmvJson(cleanPayload);
+      setNextmvEndpoint(nextmvFullUrl);
       const nextmvPath = "/v1/applications/workspace-dgxjzzgctd/runs";
       const nextmvEndpoint = "/api/nextmv" + nextmvPath; // Use proxy in development
-      const nextmvFullUrl = "https://api.cloud.nextmv.io" + nextmvPath; // Full URL for display
-      setNextmvEndpoint(nextmvFullUrl);
       
       console.log("Calling Nextmv API:", {
         endpoint: nextmvEndpoint,
@@ -3063,49 +3262,125 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="bg-primary text-primary-foreground p-4 shadow-md">
-        <div className="w-full px-4 flex items-center gap-2">
-          <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" />
-        </div>
-      </header>
+    <Layout>
+        {/* Optimization Section */}
+        <Card className="mb-6">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center justify-between text-base">
+              <div className="flex items-center gap-2">
+                <Settings className="w-4 h-4" />
+                <span>Optimización de Rutas</span>
+              </div>
+              <Button
+                onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+                variant="outline"
+                size="sm"
+              >
+                <Settings className="w-4 h-4 mr-2" />
+                Configuración
+              </Button>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0">
+            {/* Summary Section */}
+            <div className="grid grid-cols-3 gap-2 mb-2 pb-2 border-b">
+              <div className="flex items-center gap-2">
+                <MapPin className="w-4 h-4 text-primary flex-shrink-0" />
+                <div className="flex items-baseline gap-1.5 min-w-0">
+                  <p className="text-xs text-muted-foreground whitespace-nowrap">Puntos de Recogida:</p>
+                  <p className="text-base font-bold">{pickupPoints.length}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Truck className="w-4 h-4 text-secondary-foreground flex-shrink-0" />
+                <div className="flex items-baseline gap-1.5 min-w-0">
+                  <p className="text-xs text-muted-foreground whitespace-nowrap">Pasajeros:</p>
+                  <p className="text-base font-bold">{totalPassengers}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Route className="w-4 h-4 text-accent-foreground flex-shrink-0" />
+                <div className="flex items-baseline gap-1.5 min-w-0">
+                  <p className="text-xs text-muted-foreground whitespace-nowrap">Vehículos:</p>
+                  <p className="text-base font-bold">{vehicles.length}</p>
+                </div>
+              </div>
+            </div>
+            {(pickupPoints.length < 2 || vehicles.length === 0) && (
+              <p className="text-xs text-muted-foreground text-center mb-2">
+                {pickupPoints.length < 2 && "Necesitas al menos 2 puntos de recogida. "}
+                {vehicles.length === 0 && "Necesitas configurar al menos 1 vehículo."}
+              </p>
+            )}
+            <div className="flex justify-end">
+              <Button
+                onClick={handleOptimizeRoutes}
+                disabled={isOptimizing || pickupPoints.length < 2 || vehicles.length === 0}
+                className="bg-primary hover:bg-primary/90"
+                size="default"
+              >
+                {isOptimizing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Optimizando...
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-4 h-4 mr-2" />
+                    Optimizar Rutas
+                  </>
+                )}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
-      {/* Settings Button - Fixed on the left */}
-      <Sheet open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
-        <SheetTrigger asChild>
-          <Button 
-            variant="default" 
-            size="icon" 
-            className="fixed left-4 top-20 z-50 shadow-lg h-12 w-12 rounded-full"
-          >
-            <Settings className="h-5 w-5" />
-          </Button>
-        </SheetTrigger>
-            <SheetContent side="left" className="w-[600px] sm:w-[700px] overflow-y-auto">
-              <SheetHeader>
-                <SheetTitle>Configuración</SheetTitle>
-              </SheetHeader>
-              <div className="mt-6">
-                <Tabs defaultValue="pickup-points" className="w-full">
-                  <TabsList className="grid w-full grid-cols-2 mb-4">
-                    <TabsTrigger value="pickup-points" className="flex items-center gap-2">
-                      <MapPin className="w-4 h-4" />
-                      Puntos de Recogida
-                    </TabsTrigger>
-                    <TabsTrigger value="vehicles" className="flex items-center gap-2">
-                      <Truck className="w-4 h-4" />
-                      Vehículos
-                    </TabsTrigger>
-                  </TabsList>
-                  <TabsContent value="pickup-points" className="space-y-6 mt-0">
-                    <Card>
-                      <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                          <MapPin className="w-5 h-5" />
-                          Puntos de Recogida
-                        </CardTitle>
-                        <div className="flex flex-col gap-2 overflow-hidden" style={{ marginTop: '32px' }}>
-                          <div className="flex gap-2 flex-wrap">
+        {/* Main Content Area - Flex layout for settings, results and map */}
+        <div className="flex gap-4 w-full">
+          {/* Settings Section - Left Side */}
+          {isSettingsOpen && (
+            <div className="w-[600px] flex-shrink-0">
+              <Card className="h-[calc(100vh-240px)] flex flex-col">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center justify-between text-base">
+                    <div className="flex items-center gap-2">
+                      <Settings className="w-4 h-4" />
+                      <span>Configuración</span>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      onClick={() => setIsSettingsOpen(false)}
+                    >
+                      <X className="w-4 h-4" />
+                    </Button>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="flex-1 min-h-0 overflow-y-auto">
+                  <Tabs defaultValue="pickup-points" className="w-full">
+                    <TabsList className="grid w-full grid-cols-3 mb-4">
+                      <TabsTrigger value="pickup-points" className="flex items-center gap-2">
+                        <MapPin className="w-4 h-4" />
+                        Puntos de Recogida
+                      </TabsTrigger>
+                      <TabsTrigger value="vehicles" className="flex items-center gap-2">
+                        <Truck className="w-4 h-4" />
+                        Vehículos
+                      </TabsTrigger>
+                      <TabsTrigger value="config" className="flex items-center gap-2">
+                        <Settings className="w-4 h-4" />
+                        Criterios
+                      </TabsTrigger>
+                    </TabsList>
+                    <TabsContent value="pickup-points" className="space-y-6 mt-0">
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="flex items-center gap-2">
+                            <MapPin className="w-5 h-5" />
+                            Puntos de Recogida
+                          </CardTitle>
+                          <div className="flex gap-2 flex-wrap overflow-hidden" style={{ marginTop: '32px' }}>
                             <label htmlFor="excel-upload" className="cursor-pointer flex-shrink-0">
                               <Button
                                 type="button"
@@ -3136,159 +3411,115 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
                               <Plus className="w-4 h-4 mr-1.5" />
                               Agregar Punto
                             </Button>
-                          </div>
-                          {pickupPoints.length > 0 && (
-                            <AlertDialog open={isDeleteAllPointsDialogOpen} onOpenChange={setIsDeleteAllPointsDialogOpen}>
-                              <AlertDialogTrigger asChild>
-                                <Button
-                                  variant="destructive"
-                                  size="sm"
-                                  className="px-3 whitespace-nowrap flex-shrink-0 w-fit"
-                                >
-                                  <Trash2 className="w-4 h-4 mr-1.5" />
-                                  Eliminar Todos
-                                </Button>
-                              </AlertDialogTrigger>
-                              <AlertDialogContent>
-                                <AlertDialogHeader>
-                                  <AlertDialogTitle>¿Eliminar todos los puntos?</AlertDialogTitle>
-                                  <AlertDialogDescription>
-                                    ¿Estás seguro de que deseas eliminar todos los {pickupPoints.length} puntos de recogida? Esta acción no se puede deshacer.
-                                  </AlertDialogDescription>
-                                </AlertDialogHeader>
-                                <AlertDialogFooter>
-                                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                  <AlertDialogAction
-                                    onClick={handleDeleteAllPickupPoints}
-                                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                            {pickupPoints.length > 0 && (
+                              <AlertDialog open={isDeleteAllPointsDialogOpen} onOpenChange={setIsDeleteAllPointsDialogOpen}>
+                                <AlertDialogTrigger asChild>
+                                  <Button
+                                    variant="destructive"
+                                    size="sm"
+                                    className="px-3 whitespace-nowrap flex-shrink-0"
                                   >
+                                    <Trash2 className="w-4 h-4 mr-1.5" />
                                     Eliminar Todos
-                                  </AlertDialogAction>
-                                </AlertDialogFooter>
-                              </AlertDialogContent>
-                            </AlertDialog>
-                          )}
-                        </div>
-                      </CardHeader>
-                      <CardContent>
-                        <PickupPointsList 
-                          points={pickupPoints} 
-                          onRemove={handleRemovePickupPoint}
-                          onPointClick={(point) => setFocusedPoint(point)}
-                          onEdit={handleEditPickupPoint}
-                        />
-                      </CardContent>
-                    </Card>
-                  </TabsContent>
-                  <TabsContent value="vehicles" className="mt-0">
-                    <VehicleConfig 
-                      onAdd={handleAddVehicle}
-                      onUpdate={handleUpdateVehicle}
-                      onDelete={handleDeleteVehicle} 
-                      vehicles={vehicles}
-                      onMapClickMode={handleVehicleLocationMapClick}
-                      onLocationUpdate={handleVehicleLocationUpdate}
-                      isDialogOpen={isVehicleDialogOpen}
-                      setIsDialogOpen={setIsVehicleDialogOpen}
-                      onVehicleExcelUpload={handleVehicleExcelUpload}
-                    />
-                  </TabsContent>
-                </Tabs>
-              </div>
-            </SheetContent>
-          </Sheet>
-
-      <main className="w-full pl-4 pt-4 pb-4 pr-0">
-        {/* Optimization Controls */}
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center justify-between">
-              <span>Optimización de Rutas</span>
-              <div className="flex gap-2">
-                <Button
-                  onClick={() => setIsPreviousRunsDialogOpen(true)}
-                  variant="outline"
-                  size="sm"
-                  disabled={isLoadingRuns}
-                >
-                  <History className="w-4 h-4 mr-2" />
-                  Ejecuciones Anteriores
-                </Button>
-                <Button
-                  onClick={handleOptimizeRoutes}
-                  disabled={isOptimizing || pickupPoints.length < 2 || vehicles.length === 0}
-                  className="bg-primary hover:bg-primary/90"
-                  size="sm"
-                >
-                  {isOptimizing ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Optimizando...
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-4 h-4 mr-2" />
-                      Optimizar Rutas
-                    </>
-                  )}
-                </Button>
-              </div>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {(pickupPoints.length < 2 || vehicles.length === 0) && (
-              <p className="text-sm text-muted-foreground text-center">
-                {pickupPoints.length < 2 && "Necesitas al menos 2 puntos de recogida. "}
-                {vehicles.length === 0 && "Necesitas configurar al menos 1 vehículo."}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Temporarily hidden - Nextmv JSON Section */}
-        {/* {nextmvJson && (
-          <Card className="mb-6">
-            <CardHeader 
-              className="cursor-pointer hover:bg-muted/50 transition-colors"
-              onClick={() => setShowNextmvJson(!showNextmvJson)}
-            >
-              <div className="flex items-center justify-between">
-                <CardTitle className="flex items-center gap-2">
-                  <Code className="w-5 h-5" />
-                  JSON enviado a Nextmv
-                </CardTitle>
-                {showNextmvJson ? (
-                  <ChevronUp className="w-5 h-5" />
-                ) : (
-                  <ChevronDown className="w-5 h-5" />
-                )}
-              </div>
-            </CardHeader>
-            {showNextmvJson && (
-              <CardContent className="space-y-4">
-                {nextmvEndpoint && (
-                  <div>
-                    <p className="text-sm font-semibold mb-2">Endpoint:</p>
-                    <div className="bg-muted p-3 rounded-lg">
-                      <code className="text-sm text-primary font-mono break-all">
-                        {nextmvEndpoint}
-                      </code>
-                    </div>
-                  </div>
-                )}
-                <div>
-                  <p className="text-sm font-semibold mb-2">Payload JSON:</p>
-                  <pre className="bg-muted p-4 rounded-lg overflow-auto text-sm max-h-96">
-                    <code>{JSON.stringify(nextmvJson, null, 2)}</code>
-                  </pre>
-                </div>
-              </CardContent>
-            )}
-          </Card>
-        )} */}
-
-        {/* Main Content Area - Flex layout for results and map */}
-        <div className="flex gap-4 w-full">
+                                  </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>¿Eliminar todos los puntos?</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                      ¿Estás seguro de que deseas eliminar todos los {pickupPoints.length} puntos de recogida? Esta acción no se puede deshacer.
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                    <AlertDialogAction
+                                      onClick={handleDeleteAllPickupPoints}
+                                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                    >
+                                      Eliminar Todos
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
+                            )}
+                          </div>
+                        </CardHeader>
+                        <CardContent>
+                          <PickupPointsList 
+                            points={pickupPoints} 
+                            onRemove={handleRemovePickupPoint}
+                            onPointClick={(point) => setFocusedPoint(point)}
+                            onEdit={handleEditPickupPoint}
+                          />
+                        </CardContent>
+                      </Card>
+                    </TabsContent>
+                    <TabsContent value="vehicles" className="mt-0">
+                      <VehicleConfig 
+                        onAdd={handleAddVehicle}
+                        onUpdate={handleUpdateVehicle}
+                        onDelete={handleDeleteVehicle}
+                        onDeleteAll={handleDeleteAllVehicles}
+                        vehicles={vehicles}
+                        onMapClickMode={handleVehicleLocationMapClick}
+                        onLocationUpdate={handleVehicleLocationUpdate}
+                        isDialogOpen={isVehicleDialogOpen}
+                        setIsDialogOpen={setIsVehicleDialogOpen}
+                        onVehicleExcelUpload={handleVehicleExcelUpload}
+                      />
+                    </TabsContent>
+                    <TabsContent value="config" className="mt-0 space-y-6">
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="flex items-center gap-2">
+                            <Settings className="w-5 h-5" />
+                            Criterios de Optimización
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-6">
+                          <div className="space-y-2">
+                            <Label htmlFor="travel-type">Tipo de Viaje</Label>
+                            <Select
+                              value={optimizationConfig.travelType}
+                              onValueChange={(value: "distance" | "time") => {
+                                setOptimizationConfig(prev => ({ ...prev, travelType: value }));
+                              }}
+                            >
+                              <SelectTrigger id="travel-type">
+                                <SelectValue placeholder="Selecciona el tipo de viaje" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="distance">Distancia</SelectItem>
+                                <SelectItem value="time">Tiempo</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <p className="text-xs text-muted-foreground">
+                              Determina si la optimización se basa en distancia o tiempo de viaje.
+                            </p>
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="solve-duration">Duración de Resolución</Label>
+                            <Input
+                              id="solve-duration"
+                              type="text"
+                              value={optimizationConfig.solveDuration}
+                              onChange={(e) => {
+                                setOptimizationConfig(prev => ({ ...prev, solveDuration: e.target.value }));
+                              }}
+                              placeholder="10s"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Tiempo máximo para resolver la optimización (ej: "10s", "30s", "1m").
+                            </p>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </TabsContent>
+                  </Tabs>
+                </CardContent>
+              </Card>
+            </div>
+          )}
           {/* Results Container - Left Side (only shown when routes exist) */}
           {routes.length > 0 && (() => {
           // Filter routes to match legend: only routes with valid polylines AND at least one actual stop (excluding start/end)
@@ -3328,15 +3559,66 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           ];
           
           const getVehicleName = (routeIndex: number, route: any): string => {
+            // Debug logging
+            console.log(`[getVehicleName] Route ${routeIndex}:`, {
+              vehicle_id: route.vehicle_id,
+              route_data_id: route.route_data?.id,
+              vehicles_count: vehicles.length,
+              vehicle_ids: vehicles.map(v => v.id)
+            });
+            
+            // First, try to match by vehicle_id from database
             if (route.vehicle_id && vehicles.length > 0) {
               const vehicle = vehicles.find(v => v.id === route.vehicle_id);
-              if (vehicle) return vehicle.name;
+              if (vehicle) {
+                console.log(`[getVehicleName] Matched by vehicle_id: ${vehicle.name}`);
+                return vehicle.name;
+              }
             }
+            
+            // Second, try to match by route_data.id (the vehicle ID from Nextmv response)
             if (route.route_data?.id && vehicles.length > 0) {
-              const vehicle = vehicles.find(v => v.id === route.route_data.id || `vehicle-${vehicles.indexOf(v)}` === route.route_data.id);
-              if (vehicle) return vehicle.name;
+              // Try exact match first
+              let vehicle = vehicles.find(v => v.id === route.route_data.id);
+              if (vehicle) {
+                console.log(`[getVehicleName] Matched by route_data.id (exact): ${vehicle.name}`);
+                return vehicle.name;
+              }
+              
+              // Try matching with vehicle-{index} format
+              vehicle = vehicles.find((v, idx) => `vehicle-${idx}` === route.route_data.id);
+              if (vehicle) {
+                console.log(`[getVehicleName] Matched by vehicle-${vehicles.indexOf(vehicle)}: ${vehicle.name}`);
+                return vehicle.name;
+              }
+              
+              // Try matching by the vehicle ID format from Nextmv (could be UUID or other format)
+              vehicle = vehicles.find(v => String(v.id) === String(route.route_data.id));
+              if (vehicle) {
+                console.log(`[getVehicleName] Matched by route_data.id (string): ${vehicle.name}`);
+                return vehicle.name;
+              }
             }
-            return vehicles[routeIndex]?.name || `Vehículo ${routeIndex + 1}`;
+            
+            // Third, try to get vehicle name from route_data if it exists
+            if (route.route_data?.name) {
+              console.log(`[getVehicleName] Using route_data.name: ${route.route_data.name}`);
+              return route.route_data.name;
+            }
+            
+            // Last resort: use route index in the unique routes array, but try to find a better match
+            // by checking if we can match by position in the original vehicles array
+            const uniqueRoutesArray = Array.from(vehicleRouteMap.values());
+            const routePosition = uniqueRoutesArray.findIndex(r => r.index === routeIndex);
+            if (routePosition >= 0 && routePosition < vehicles.length) {
+              const name = vehicles[routePosition]?.name || `Vehículo ${routePosition + 1}`;
+              console.log(`[getVehicleName] Using route position ${routePosition}: ${name}`);
+              return name;
+            }
+            
+            // Final fallback - but this is likely wrong, so log a warning
+            console.warn(`[getVehicleName] Using fallback for route ${routeIndex}. vehicle_id: ${route.vehicle_id}, route_data.id: ${route.route_data?.id}`);
+            return `Vehículo ${routeIndex + 1}`;
           };
 
           // Calculate route count
@@ -3626,64 +3908,184 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
                           return idx > -1 ? stopId.substring(0, idx) : stopId;
                         };
                         
-                        // Get all stops with passengers
+                        // Get all stops including start point (but excluding end point)
+                        let stopCounter = 1; // Start at 1 for regular stops (start point will be 0)
                         const stopsWithDetails = vehicleRoute
                           .filter((routeStop: any) => {
                             const stopId = routeStop.stop?.id;
-                            return stopId && !stopId.includes("-start") && !stopId.includes("-end");
+                            return stopId && !stopId.includes("-end");
                           })
-                          .map((routeStop: any, stopIndex: number) => {
+                          .map((routeStop: any) => {
                             const stopId = routeStop.stop?.id;
+                            const isStartPoint = stopId?.includes("-start");
                             const originalPointId = extractOriginalPointId(stopId);
                             const point = pickupPoints.find(p => p.id === originalPointId);
                             
-                            // Extract person IDs from stop ID if encoded
+                            // Extract person IDs from stop ID if encoded (start points have no passengers)
                             // Format can be: {point.id}__person_{person_id1}__person_{person_id2}...
-                            let personIds: string[] = [];
-                            if (stopId.includes('__person_')) {
-                              const regex = /__person_([^_]+)/g;
+                            // Use the same logic as extractPassengersFromRoute for consistency
+                            const personIds = new Set<string>();
+                            if (!isStartPoint && stopId.includes('__person_')) {
+                              // Match all occurrences of __person_ followed by the person ID
+                              // Person ID can contain letters, numbers, hyphens, etc. until next __person_ or end of string
+                              const regex = /__person_([^_]+?)(?=__person_|$)/g;
                               let match;
                               while ((match = regex.exec(stopId)) !== null) {
-                                personIds.push(match[1]);
+                                const personId = match[1];
+                                if (personId) {
+                                  personIds.add(personId);
+                                }
                               }
                             }
                             
-                            // Fallback: check if point has person_id
-                            if (personIds.length === 0 && point?.person_id) {
+                            // Always check if point has person_id (same as extractPassengersFromRoute)
+                            // Start points have no passengers, so skip this for start points
+                            if (!isStartPoint && point?.person_id) {
                               // person_id might be comma-separated
-                              personIds = point.person_id.split(',').map(id => id.trim()).filter(id => id);
+                              const ids = point.person_id.split(',').map(id => id.trim()).filter(id => id);
+                              ids.forEach(id => personIds.add(id));
+                            }
+                            
+                            // Get point name - prefer point name, fallback to generic name
+                            // For start points, use a special label
+                            let pointName: string;
+                            if (isStartPoint) {
+                              pointName = point?.name || "Punto de inicio";
+                            } else {
+                              pointName = point?.name || `Punto ${stopCounter}`;
+                            }
+                            
+                            // Calculate stop index: start point is 0, others increment from 1
+                            const stopIndex = isStartPoint ? 0 : stopCounter;
+                            if (!isStartPoint) {
+                              stopCounter++;
                             }
                             
                             return {
-                              stopIndex: stopIndex + 1,
+                              stopIndex: stopIndex,
+                              isStartPoint: isStartPoint,
                               stopId: originalPointId,
-                              pointName: point?.name || stopId,
-                              personIds: personIds,
+                              pointName: pointName,
+                              personIds: Array.from(personIds),
                               location: routeStop.stop?.location,
                             };
+                          })
+                          .sort((a, b) => {
+                            // Sort so start point (index 0) comes first, then others by index
+                            if (a.isStartPoint) return -1;
+                            if (b.isStartPoint) return 1;
+                            return a.stopIndex - b.stopIndex;
                           });
+                        
+                        // Calculate route summary metrics
+                        // Count actual stops (excluding start/end)
+                        const actualStops = vehicleRoute.filter((routeStop: any) => {
+                          const stopId = routeStop.stop?.id;
+                          return stopId && !stopId.includes("-start") && !stopId.includes("-end");
+                        }).length;
+                        
+                        // Count passengers by extracting from route stops
+                        const passengers = extractPassengersFromRoute(route);
+                        const passengerCount = passengers.length;
+                        
+                        // Get distance and duration
+                        const totalDistance = route.total_distance || route.route_data?.route_travel_distance || 0;
+                        const totalDuration = route.total_duration || route.route_data?.route_travel_duration || 0;
+                        
+                        // Format distance (convert meters to km if needed)
+                        const distanceKm = totalDistance > 1000 ? (totalDistance / 1000).toFixed(2) : totalDistance.toFixed(2);
+                        const distanceUnit = totalDistance > 1000 ? "km" : "m";
+                        
+                        // Format duration (convert seconds to minutes if needed)
+                        const durationMin = totalDuration > 60 ? (totalDuration / 60).toFixed(1) : totalDuration.toFixed(0);
+                        const durationUnit = totalDuration > 60 ? "min" : "seg";
                         
                         return (
                           <div className="space-y-3 h-full overflow-y-auto px-3 pb-3">
-                            <div className="flex items-center gap-2 pb-2 border-b">
-                              <div
-                                className="w-3 h-3 rounded-sm flex-shrink-0"
-                                style={{ backgroundColor: color }}
-                              />
-                              <p className="font-semibold text-sm">{vehicleName}</p>
+                            {/* Route Summary Card - Same as route list view */}
+                            <div className="p-2 rounded-lg border bg-card">
+                              <div className="flex items-start gap-2">
+                                <div
+                                  className="w-3 h-3 rounded-sm flex-shrink-0 mt-0.5"
+                                  style={{ backgroundColor: color }}
+                                />
+                                <div className="flex-1 min-w-0">
+                                  <p className="font-semibold text-sm truncate">{vehicleName}</p>
+                                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 mt-1 text-xs text-muted-foreground">
+                                    <div>
+                                      <span className="font-medium">Pasajeros:</span> {passengerCount}
+                                    </div>
+                                    <div>
+                                      <span className="font-medium">Paradas:</span> {actualStops}
+                                    </div>
+                                    <div>
+                                      <span className="font-medium">Distancia:</span> {distanceKm} {distanceUnit}
+                                    </div>
+                                    <div>
+                                      <span className="font-medium">Duración:</span> {durationMin} {durationUnit}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                            
+                            <div className="flex items-center justify-between gap-2 pb-2 border-b">
+                              <div className="flex items-center gap-2">
+                                <div
+                                  className="w-3 h-3 rounded-sm flex-shrink-0"
+                                  style={{ backgroundColor: color }}
+                                />
+                                <p className="font-semibold text-sm">Detalles de Paradas</p>
+                              </div>
+                              {selectedRouteIndex !== null && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-7 text-xs"
+                                  onClick={() => {
+                                    setZoomToRoute(selectedRouteIndex);
+                                    // Reset after a short delay to allow re-triggering
+                                    setTimeout(() => setZoomToRoute(null), 100);
+                                  }}
+                                >
+                                  <ZoomIn className="w-3 h-3 mr-1" />
+                                  Ver ruta completa
+                                </Button>
+                              )}
                             </div>
                             <div className="space-y-2">
                               {stopsWithDetails.map((stop, idx) => (
-                                <div key={idx} className="p-2 rounded-lg border bg-muted/50">
-                                  <div className="flex items-start justify-between mb-1">
-                                    <div>
+                                <div 
+                                  key={idx} 
+                                  className="p-2 rounded-lg border bg-muted/50 cursor-pointer hover:bg-muted transition-colors"
+                                  onClick={() => {
+                                    if (stop.location?.lon && stop.location?.lat) {
+                                      setFocusLocation({
+                                        lon: Number(stop.location.lon),
+                                        lat: Number(stop.location.lat)
+                                      });
+                                      // Reset after a short delay to allow re-triggering
+                                      setTimeout(() => setFocusLocation(null), 1100);
+                                    }
+                                  }}
+                                >
+                                  <div className="flex items-start gap-2 mb-1">
+                                    <div 
+                                      className="w-6 h-6 rounded-full text-white flex items-center justify-center flex-shrink-0 text-xs font-semibold"
+                                      style={{ backgroundColor: color }}
+                                    >
+                                      {stop.isStartPoint ? "S" : stop.stopIndex}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
                                       <p className="font-medium text-sm">
-                                        Parada {stop.stopIndex}: {stop.pointName}
+                                        {stop.pointName}
                                       </p>
                                     </div>
                                   </div>
-                                  {stop.personIds.length > 0 && (
-                                    <div className="mt-1">
+                                  {stop.isStartPoint ? (
+                                    <p className="text-xs text-muted-foreground italic ml-8">Punto de inicio - Sin pasajeros</p>
+                                  ) : stop.personIds.length > 0 ? (
+                                    <div className="mt-1 ml-8">
                                       <p className="text-xs text-muted-foreground mb-1">Pasajeros:</p>
                                       <div className="flex flex-wrap gap-1">
                                         {stop.personIds.map((personId, pIdx) => (
@@ -3696,9 +4098,8 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
                                         ))}
                                       </div>
                                     </div>
-                                  )}
-                                  {stop.personIds.length === 0 && (
-                                    <p className="text-xs text-muted-foreground italic">Sin pasajeros asignados</p>
+                                  ) : (
+                                    <p className="text-xs text-muted-foreground italic ml-8">Sin pasajeros asignados</p>
                                   )}
                                 </div>
                               ))}
@@ -3717,8 +4118,8 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           );
         })()}
 
-          {/* Map Container - Full width or with results container */}
-          <div className={`relative min-w-0 ${routes.length > 0 ? 'flex-1' : 'w-full'}`}>
+          {/* Map Container - Full width or with results/settings container */}
+          <div className={`relative min-w-0 ${routes.length > 0 || isSettingsOpen ? 'flex-1' : 'w-full'}`}>
             <Card className="h-[calc(100vh-240px)] w-full">
               <CardContent className="p-0 h-full w-full">
                 <Map 
@@ -3744,6 +4145,8 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
                   vehicleStartLocation={currentVehicleStartLocation}
                   vehicleEndLocation={currentVehicleEndLocation}
                   selectedRouteIndex={selectedRouteIndex}
+                  focusLocation={focusLocation}
+                  zoomToRoute={zoomToRoute}
                 />
               </CardContent>
             </Card>
@@ -3760,7 +4163,6 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
             </Button>
           </div>
         </div>
-      </main>
 
       {/* Pickup Point Form Dialog */}
       <Dialog open={isPickupPointDialogOpen} onOpenChange={setIsPickupPointDialogOpen}>
@@ -3778,100 +4180,49 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         </DialogContent>
       </Dialog>
 
-      {/* Previous Optimizations Dialog */}
-      <Dialog open={isPreviousRunsDialogOpen} onOpenChange={setIsPreviousRunsDialogOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      {/* JSON Preview Dialog (Hidden - Ctrl+Shift+P) */}
+      <Dialog open={previewJsonDialogOpen} onOpenChange={setPreviewJsonDialogOpen}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="flex items-center justify-between">
-              <span className="flex items-center gap-2">
-                <History className="w-5 h-5" />
-                Ejecuciones Anteriores
-              </span>
-              <div className="flex gap-2">
-                <Button
-                  onClick={loadRuns}
-                  variant="outline"
-                  size="sm"
-                  disabled={isLoadingRuns}
-                >
-                  {isLoadingRuns ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    "Actualizar"
-                  )}
-                </Button>
-              </div>
-            </DialogTitle>
+            <DialogTitle>Vista Previa del JSON para Optimizador</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            {isLoadingRuns ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader2 className="w-6 h-6 animate-spin" />
-              </div>
-            ) : runs.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-4">
-                No hay ejecuciones disponibles
-              </p>
-            ) : (
-              <div className="space-y-2 max-h-[60vh] overflow-y-auto">
-                {runs.map((run) => {
-                  const runId = run.id || run.run_id;
-                  const status = run.metadata?.status || run.status || "unknown";
-                  const createdAt = run.metadata?.created_at || run.created_at || "";
-                  const isSelected = selectedRunId === runId;
-                  
-                  // Format status for display
-                  const statusDisplay = status === "succeeded" ? "✓ Completado" :
-                                       status === "failed" ? "✗ Fallido" :
-                                       status === "error" ? "✗ Error" :
-                                       status === "running" ? "⟳ Ejecutando" :
-                                       status === "queued" ? "⏳ En cola" :
-                                       status;
-                  
-                  return (
-                    <Card
-                      key={runId}
-                      className={`cursor-pointer transition-colors ${
-                        isSelected
-                          ? "bg-primary text-primary-foreground"
-                          : "hover:bg-muted"
-                      }`}
-                      onClick={() => {
-                        handleRunSelect(runId);
-                        setIsPreviousRunsDialogOpen(false);
-                      }}
-                    >
-                      <CardContent className="p-4">
-                        <div className="flex items-center justify-between">
-                          <div className="flex-1">
-                            <p className="font-semibold text-sm">ID: {runId}</p>
-                            <p className="text-xs opacity-80 mt-1">
-                              {statusDisplay} | {createdAt ? new Date(createdAt).toLocaleString('es-ES', {
-                                year: 'numeric',
-                                month: 'short',
-                                day: 'numeric',
-                                hour: '2-digit',
-                                minute: '2-digit'
-                              }) : "Fecha desconocida"}
-                            </p>
-                          </div>
-                          {isSelected && isOptimizing && (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          )}
-                          {isSelected && !isOptimizing && (
-                            <span className="text-xs">✓ Seleccionado</span>
-                          )}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  );
-                })}
+            {nextmvEndpoint && (
+              <div className="text-sm text-muted-foreground">
+                <strong>Endpoint:</strong> {nextmvEndpoint}
               </div>
             )}
+            {nextmvJson && (
+              <div className="bg-muted p-4 rounded-lg">
+                <pre className="text-xs overflow-x-auto whitespace-pre-wrap">
+                  {JSON.stringify(nextmvJson, null, 2)}
+                </pre>
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (nextmvJson) {
+                    navigator.clipboard.writeText(JSON.stringify(nextmvJson, null, 2));
+                    toast({
+                      title: "Copiado",
+                      description: "JSON copiado al portapapeles",
+                    });
+                  }
+                }}
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Copiar JSON
+              </Button>
+              <Button onClick={() => setPreviewJsonDialogOpen(false)}>
+                Cerrar
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
-    </div>
+    </Layout>
   );
 };
 
