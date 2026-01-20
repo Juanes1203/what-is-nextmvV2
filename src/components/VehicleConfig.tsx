@@ -36,6 +36,18 @@ interface Vehicle {
     lon: number;
     lat: number;
   };
+  grupo?: string;
+}
+
+interface PickupPoint {
+  id: string;
+  name: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+  quantity?: number;
+  person_id?: string;
+  grupo?: string;
 }
 
 interface VehicleConfigProps {
@@ -49,9 +61,30 @@ interface VehicleConfigProps {
   isDialogOpen?: boolean;
   setIsDialogOpen?: (open: boolean) => void;
   onVehicleExcelUpload?: (file: File) => void;
+  routes?: any[];
+  pickupPoints?: PickupPoint[];
 }
 
-const VehicleConfig = ({ onAdd, onUpdate, onDelete, onDeleteAll, vehicles, onMapClickMode, onLocationUpdate, isDialogOpen, setIsDialogOpen, onVehicleExcelUpload }: VehicleConfigProps) => {
+const VehicleConfig = ({ onAdd, onUpdate, onDelete, onDeleteAll, vehicles, onMapClickMode, onLocationUpdate, isDialogOpen, setIsDialogOpen, onVehicleExcelUpload, routes = [], pickupPoints = [] }: VehicleConfigProps) => {
+  // Debug logging
+  useEffect(() => {
+    console.log('[VehicleConfig] Props received:', {
+      vehiclesCount: vehicles.length,
+      routesCount: routes.length,
+      pickupPointsCount: pickupPoints.length,
+      pickupPointsWithGrupo: pickupPoints.filter(p => p.grupo).length
+    });
+    if (routes.length > 0) {
+      console.log('[VehicleConfig] Sample route structure:', {
+        route0: {
+          vehicle_id: routes[0]?.vehicle_id,
+          route_data_id: routes[0]?.route_data?.id,
+          has_route: !!routes[0]?.route_data?.route,
+          route_stops_count: routes[0]?.route_data?.route?.length || 0
+        }
+      });
+    }
+  }, [routes, vehicles, pickupPoints]);
   const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
   const [name, setName] = useState("");
   const [capacity, setCapacity] = useState("100");
@@ -374,17 +407,155 @@ const VehicleConfig = ({ onAdd, onUpdate, onDelete, onDeleteAll, vehicles, onMap
         <CardContent className="space-y-4">
           {vehicles.length > 0 ? (
             <div className="space-y-2 max-h-[400px] overflow-y-auto">
-              {vehicles.map((vehicle, idx) => (
-                <div
-                  key={vehicle.id || idx}
-                  className="p-3 bg-muted rounded-lg text-sm flex items-start justify-between gap-2"
-                >
-                  <div className="flex-1">
-                    <p className="font-semibold">{vehicle.name}</p>
-                    <p className="text-muted-foreground">
-                      Capacidad: {vehicle.capacity} | Dist. máx: {vehicle.max_distance} km
-                    </p>
-                  </div>
+              {vehicles.map((vehicle, idx) => {
+                // Extract grupos for this vehicle from routes
+                const extractGruposForVehicle = (vehicle: Vehicle, vehicleIndex: number): string[] => {
+                  const grupos = new Set<string>();
+                  
+                  if (!routes || routes.length === 0) {
+                    return [];
+                  }
+                  
+                  if (!pickupPoints || pickupPoints.length === 0) {
+                    return [];
+                  }
+                  
+                  routes.forEach((route: any, routeIndex: number) => {
+                    // Match vehicle using the same logic as getVehicleName in Index.tsx
+                    let matchesVehicle = false;
+                    
+                    // 1. Match by vehicle_id from database
+                    if (route.vehicle_id && vehicle.id && route.vehicle_id === vehicle.id) {
+                      matchesVehicle = true;
+                    }
+                    
+                    // 2. Match by route_data.id (the vehicle ID from Nextmv response)
+                    if (!matchesVehicle && route.route_data?.id) {
+                      // Try exact match first
+                      if (vehicle.id && route.route_data.id === vehicle.id) {
+                        matchesVehicle = true;
+                      }
+                      
+                      // Try matching with vehicle-{index} format
+                      if (!matchesVehicle) {
+                        const vehiclesIndex = vehicles.indexOf(vehicle);
+                        if (route.route_data.id === `vehicle-${vehiclesIndex}` || 
+                            route.route_data.id === `vehicle-${vehicleIndex}`) {
+                          matchesVehicle = true;
+                        }
+                      }
+                      
+                      // Try matching by string comparison
+                      if (!matchesVehicle && vehicle.id && String(route.route_data.id) === String(vehicle.id)) {
+                        matchesVehicle = true;
+                      }
+                    }
+                    
+                    // 3. Match by position in routes array (if both vehicle and route don't have IDs)
+                    if (!matchesVehicle && !vehicle.id && !route.vehicle_id && !route.route_data?.id) {
+                      matchesVehicle = routeIndex === vehicleIndex;
+                    }
+                    
+                    if (matchesVehicle) {
+                      const vehicleRoute = route.route_data?.route || [];
+                      vehicleRoute.forEach((routeStop: any) => {
+                        const stopId = routeStop.stop?.id;
+                        if (!stopId || stopId.includes("-start") || stopId.includes("-end")) return;
+                        
+                        // Extract original point ID from encoded stop ID
+                        const extractOriginalPointId = (stopId: string): string => {
+                          if (!stopId) return stopId;
+                          const idx = stopId.indexOf('__person_');
+                          return idx > -1 ? stopId.substring(0, idx) : stopId;
+                        };
+                        
+                        const originalPointId = extractOriginalPointId(stopId);
+                        const point = pickupPoints.find(p => p.id === originalPointId);
+                        
+                        if (point?.grupo) {
+                          grupos.add(point.grupo);
+                        }
+                      });
+                    }
+                  });
+                  
+                  return Array.from(grupos);
+                };
+                
+                const vehicleGrupos = extractGruposForVehicle(vehicle, idx);
+                
+                // Combine vehicle's own grupo with grupos from routes
+                const allGrupos = new Set<string>();
+                if (vehicle.grupo) {
+                  allGrupos.add(vehicle.grupo);
+                }
+                vehicleGrupos.forEach(g => allGrupos.add(g));
+                const displayGrupos = Array.from(allGrupos);
+                
+                // Enhanced debug logging to diagnose the issue
+                if (routes.length > 0) {
+                  const matchingRoutes = routes.filter((route: any) => {
+                    return (route.vehicle_id && route.vehicle_id === vehicle.id) ||
+                           (vehicle.id && route.route_data?.id === vehicle.id) ||
+                           (route.route_data?.id && route.route_data.id === `vehicle-${idx}`) ||
+                           (route.route_data?.id && route.route_data.id === `vehicle-${vehicles.indexOf(vehicle)}`);
+                  });
+                  
+                  if (matchingRoutes.length === 0 && displayGrupos.length === 0) {
+                    // Log when no routes match at all
+                    console.warn(`[VehicleConfig] Vehicle ${vehicle.name} (ID: ${vehicle.id}, index: ${idx}) - No matching routes found.`, {
+                      totalRoutes: routes.length,
+                      routeVehicleIds: routes.map((r: any, i: number) => ({
+                        index: i,
+                        vehicle_id: r.vehicle_id,
+                        route_data_id: r.route_data?.id
+                      })),
+                      vehicleId: vehicle.id
+                    });
+                  } else if (matchingRoutes.length > 0 && displayGrupos.length === 0) {
+                    // Log when routes match but no grupos found
+                    const firstRoute = matchingRoutes[0];
+                    const stopsWithGrupo = (firstRoute.route_data?.route || []).filter((stop: any) => {
+                      const stopId = stop.stop?.id;
+                      if (!stopId || stopId.includes("-start") || stopId.includes("-end")) return false;
+                      const idx = stopId.indexOf('__person_');
+                      const originalPointId = idx > -1 ? stopId.substring(0, idx) : stopId;
+                      const point = pickupPoints.find(p => p.id === originalPointId);
+                      return !!point?.grupo;
+                    });
+                    console.warn(`[VehicleConfig] Vehicle ${vehicle.name} (ID: ${vehicle.id}) - ${matchingRoutes.length} matching route(s) but no grupos found.`, {
+                      stopsCount: firstRoute.route_data?.route?.length || 0,
+                      stopsWithGrupoCount: stopsWithGrupo.length,
+                      sampleStopIds: (firstRoute.route_data?.route || []).slice(0, 3).map((s: any) => s.stop?.id)
+                    });
+                  }
+                }
+                
+                return (
+                  <div
+                    key={vehicle.id || idx}
+                    className="p-3 bg-muted rounded-lg text-sm flex items-start justify-between gap-2"
+                  >
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="font-semibold">{vehicle.name}</p>
+                        {displayGrupos.length > 0 && (
+                          <div className="flex gap-1 flex-wrap">
+                            {displayGrupos.map((grupo, gIdx) => (
+                              <span 
+                                key={gIdx}
+                                className="px-2 py-0.5 text-xs font-semibold text-purple-700 bg-purple-100 rounded-md border border-purple-300"
+                              >
+                                {grupo}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <p className="text-muted-foreground">
+                        Capacidad: {vehicle.capacity} | Dist. máx: {vehicle.max_distance} km
+                      </p>
+                    </div>
                   <div className="flex gap-1">
                     <Button
                       variant="ghost"
@@ -435,7 +606,8 @@ const VehicleConfig = ({ onAdd, onUpdate, onDelete, onDeleteAll, vehicles, onMap
                     </AlertDialog>
                   </div>
                 </div>
-              ))}
+              );
+              })}
             </div>
           ) : (
             <p className="text-sm text-muted-foreground text-center py-4">

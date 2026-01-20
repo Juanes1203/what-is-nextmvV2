@@ -8,6 +8,7 @@ interface PickupPoint {
   longitude: number;
   quantity?: number;
   person_id?: string;
+  grupo?: string;
 }
 
 interface Vehicle {

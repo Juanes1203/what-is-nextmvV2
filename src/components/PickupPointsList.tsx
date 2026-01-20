@@ -22,6 +22,7 @@ interface PickupPoint {
   longitude: number;
   quantity?: number;
   person_id?: string;
+  grupo?: string;
 }
 
 interface PickupPointsListProps {
@@ -69,11 +70,18 @@ const PickupPointsList = ({ points, onRemove, onPointClick, onEdit }: PickupPoin
               onClick={() => onPointClick?.(point)}
             >
               <div className="flex-1 min-w-0">
-                <p className="font-semibold text-sm truncate">{point.name}</p>
+                <div className="flex items-center gap-2">
+                  <p className="font-semibold text-sm truncate">{point.name}</p>
+                  {point.grupo && (
+                    <span className="px-2 py-0.5 text-xs font-semibold text-purple-700 bg-purple-100 rounded-md border border-purple-300 flex-shrink-0">
+                      {point.grupo}
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-muted-foreground mt-1">
                   {typeof point.latitude === 'number' ? point.latitude : String(point.latitude)}, {typeof point.longitude === 'number' ? point.longitude : String(point.longitude)}
                 </p>
-                <div className="flex gap-3 mt-1">
+                <div className="flex gap-3 mt-1 flex-wrap">
                   <p className="text-xs font-semibold text-primary">
                     Cantidad: {point.quantity !== undefined && point.quantity !== null ? point.quantity : 1}
                   </p>

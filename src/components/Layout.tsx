@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router-dom";
-import { Play, History } from "lucide-react";
+import { Play, History, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -46,6 +46,22 @@ const Layout = ({ children }: LayoutProps) => {
               <Link to="/history">
                 <History className="w-4 h-4 mr-2" />
                 Ejecuciones Anteriores
+              </Link>
+            </Button>
+            <Button
+              asChild
+              variant={location.pathname === "/geocoding" ? "secondary" : "ghost"}
+              size="sm"
+              className={cn(
+                "text-primary-foreground",
+                location.pathname === "/geocoding"
+                  ? "bg-primary-foreground/20"
+                  : "hover:bg-primary-foreground/10"
+              )}
+            >
+              <Link to="/geocoding">
+                <MapPin className="w-4 h-4 mr-2" />
+                Geocodificación
               </Link>
             </Button>
           </nav>
