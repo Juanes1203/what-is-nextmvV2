@@ -19,22 +19,8 @@ serve(async (req) => {
   }
 
   try {
-    // Get the apikey from headers (Supabase uses this for public functions)
-    const apikey = req.headers.get("apikey");
-    const authHeader = req.headers.get("authorization");
-    
-    // If no apikey or authorization header, return 401
-    // But we'll accept either apikey or authorization with anon key
-    if (!apikey && !authHeader) {
-      return new Response(
-        JSON.stringify({ error: "Missing apikey or authorization header" }),
-        {
-          status: 401,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
-      );
-    }
-
+    // Don't validate authentication - Supabase will handle it
+    // Just proceed with the proxy request
     const url = new URL(req.url);
     // Strip the function prefix to forward only the Nextmv path
     const forwardedPath = url.pathname.replace(/^\/?nextmv-proxy/, "") || "/";
