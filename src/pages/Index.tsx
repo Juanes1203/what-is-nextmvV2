@@ -1449,6 +1449,8 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         quantity: number;
         person_id?: string; // Store person_id(s) - comma-separated if multiple
         grupo?: string; // Store grupo if available
+        nombre?: string; // Store nombre if available
+        direccion?: string; // Store direccion if available
       }
       
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1498,6 +1500,19 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
                  normalized.includes("grupo");
         }
       );
+      const nombreKey = allKeys.find(
+        key => {
+          const normalized = key.toLowerCase().trim();
+          return normalized === "nombre" || normalized.includes("nombre");
+        }
+      );
+      const direccionKey = allKeys.find(
+        key => {
+          const normalized = key.toLowerCase().trim();
+          return normalized === "direccion" || normalized === "dirección" || 
+                 normalized.includes("direccion") || normalized.includes("dirección");
+        }
+      );
         
         if (!latitudeKey || !longitudeKey) {
         toast({
@@ -1508,14 +1523,14 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         return;
       }
 
-      console.log("Columnas detectadas:", { latitudeKey, longitudeKey, quantityKey: quantityKey || "no encontrada", personIdKey: personIdKey || "no encontrada", grupoKey: grupoKey || "no encontrada" });
+      console.log("Columnas detectadas:", { latitudeKey, longitudeKey, quantityKey: quantityKey || "no encontrada", personIdKey: personIdKey || "no encontrada", grupoKey: grupoKey || "no encontrada", nombreKey: nombreKey || "no encontrada", direccionKey: direccionKey || "no encontrada" });
       console.log(`Total de filas en Excel: ${jsonData.length}`);
 
       // STEP 1: Read and process ALL rows first, counting occurrences
       let processedRows = 0;
       let skippedRows = 0;
       
-      // Map to track occurrences: key -> { lat, lon, count, occurrences, person_ids, grupo }
+      // Map to track occurrences: key -> { lat, lon, count, occurrences, person_ids, grupo, nombre, direccion }
       const occurrenceMap: Record<string, {
         latitude: number;
         longitude: number;
@@ -1523,6 +1538,8 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         occurrences: number[]; // Track each occurrence for debugging
         person_ids: string[]; // Track person IDs at this location
         grupo?: string; // Store grupo if available
+        nombre?: string; // Store nombre if available
+        direccion?: string; // Store direccion if available
       }> = {};
       
       for (const row of jsonData) {
@@ -1574,6 +1591,10 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         const personId = personIdKey ? String(rowData[personIdKey] || "").trim() : undefined;
         // Extract grupo if available
         const grupo = grupoKey ? String(rowData[grupoKey] || "").trim() : undefined;
+        // Extract nombre if available
+        const nombre = nombreKey ? String(rowData[nombreKey] || "").trim() : undefined;
+        // Extract direccion if available
+        const direccion = direccionKey ? String(rowData[direccionKey] || "").trim() : undefined;
         
         if (occurrenceMap[key]) {
           // Increment count for duplicate coordinates
@@ -1588,6 +1609,14 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           if (grupo && !occurrenceMap[key].grupo) {
             occurrenceMap[key].grupo = grupo;
           }
+          // Update nombre if available (use first non-empty value found)
+          if (nombre && !occurrenceMap[key].nombre) {
+            occurrenceMap[key].nombre = nombre;
+          }
+          // Update direccion if available (use first non-empty value found)
+          if (direccion && !occurrenceMap[key].direccion) {
+            occurrenceMap[key].direccion = direccion;
+          }
           processedRows++;
           console.log(`[DUPLICADO ENCONTRADO] Clave: ${key}, Cantidad anterior: ${oldCount}, Cantidad nueva: ${occurrenceMap[key].count}`);
         } else {
@@ -1599,6 +1628,8 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
             occurrences: [1], // Track first occurrence
             person_ids: personId ? [personId] : [], // Store person_id if available
             grupo: grupo || undefined, // Store grupo if available
+            nombre: nombre || undefined, // Store nombre if available
+            direccion: direccion || undefined, // Store direccion if available
           };
           processedRows++;
           if (processedRows <= 5 || processedRows % 100 === 0) {
@@ -1638,6 +1669,8 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           ? (item.person_ids.length === 1 ? item.person_ids[0] : item.person_ids.join(", "))
           : undefined, // Store single person_id or comma-separated if multiple
         grupo: item.grupo, // Store grupo if available
+        nombre: item.nombre, // Store nombre if available
+        direccion: item.direccion, // Store direccion if available
       }));
       
       // Verify quantities are being set correctly
@@ -1707,9 +1740,14 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         const lat = point.latitude;
         const lon = point.longitude;
         
+        // Use nombre for name if available, otherwise default
+        const name = point.nombre || `Punto ${index + 1}`;
+        // Use direccion for address if available, otherwise use coordinates
+        const address = point.direccion || `${lat}, ${lon}`;
+        
         return {
-          name: `Punto ${index + 1}`,
-          address: `${lat}, ${lon}`,
+          name: name,
+          address: address,
           latitude: lat,
           longitude: lon,
           quantity: quantity, // This is the consolidated count

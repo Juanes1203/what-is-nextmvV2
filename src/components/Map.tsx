@@ -4,6 +4,7 @@ import mapboxgl from "mapbox-gl";
 interface PickupPoint {
   id: string;
   name: string;
+  address: string;
   latitude: number;
   longitude: number;
   quantity?: number;
@@ -409,6 +410,7 @@ const Map = ({ pickupPoints, routes, vehicles = [], visibleRoutes, onRouteVisibi
               <h3 class="font-bold">${point.name}</h3>
               ${isStartPoint ? `<p class="text-sm font-semibold">Punto de inicio</p>` : orderNumber !== undefined ? `<p class="text-sm font-semibold">Orden: ${orderNumber}</p>` : ''}
               <p class="text-sm">${pointLocation.lat}, ${pointLocation.lon}</p>
+              ${point.address && point.address !== `${pointLocation.lat}, ${pointLocation.lon}` ? `<p class="text-sm">Dirección: ${point.address}</p>` : ''}
               ${point.quantity !== undefined ? `<p class="text-sm">Cantidad: ${point.quantity}</p>` : ''}
               ${isStartPoint ? `<p class="text-sm text-muted-foreground">Sin pasajeros</p>` : ''}
             </div>`
