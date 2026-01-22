@@ -1,3 +1,5 @@
+// @deno-types="https://deno.land/x/types/index.d.ts"
+// @ts-ignore - Deno import, works in Supabase Edge Functions
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 
 const corsHeaders = {
@@ -8,7 +10,10 @@ const corsHeaders = {
 };
 
 const NEXTMV_API_BASE = "https://api.cloud.nextmv.io";
+// @ts-ignore - Deno global, works in Supabase Edge Functions
+// deno-lint-ignore-file
 const NEXTMV_API_KEY =
+  // @ts-ignore
   Deno.env.get("NEXTMV_API_KEY") ||
   "nxmvv1_lhcoj3zDR:f5d1c365105ef511b4c47d67c6c13a729c2faecd36231d37dcdd2fcfffd03a6813235230";
 
