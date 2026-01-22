@@ -3039,8 +3039,6 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         
         // Build the GET URL for the run
         const NEXTMV_APPLICATION_ID = "workspace-dgxjzzgctd";
-        // Always use proxy to avoid CORS issues
-        const runApiUrl = `/api/nextmv/v1/applications/${NEXTMV_APPLICATION_ID}/runs/${runId}`;
         
         // Poll for the result every 10 seconds until solution is available
         const pollInterval = 10000; // Poll every 10 seconds
