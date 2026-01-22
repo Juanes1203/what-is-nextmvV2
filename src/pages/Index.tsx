@@ -2789,7 +2789,10 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         
         try {
           // Always use proxy to avoid CORS issues (works in both dev and production)
-          const apiUrl = nextmvEndpoint;
+          // Force use of proxy endpoint, never use direct URL
+          const apiUrl = nextmvEndpoint.startsWith('/api/nextmv') 
+            ? nextmvEndpoint 
+            : `/api/nextmv${nextmvPath}`;
           
           // Convert to JSON string for the request
           const requestBodyString = JSON.stringify(cleanPayload);
