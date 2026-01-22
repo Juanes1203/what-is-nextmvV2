@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
@@ -63,6 +64,7 @@ interface Vehicle {
 }
 
 const Index = () => {
+  const location = useLocation();
   const [pickupPoints, setPickupPoints] = useState<PickupPoint[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [routes, setRoutes] = useState<any[]>([]);
@@ -144,6 +146,25 @@ const Index = () => {
     loadRuns();
   }, []);
 
+  // Reset state when navigating to /new route
+  useEffect(() => {
+    if (location.pathname === "/new") {
+      setIsNewRunMode(true);
+      setSelectedRunId(null);
+      setSelectedRunData(null);
+      setRoutes([]);
+      setVisibleRoutes(new Set());
+      setIsOptimizing(false);
+      // Clear routes from database
+      supabase
+        .from("routes")
+        .delete()
+        .gte("created_at", "1970-01-01")
+        .then(() => {
+          console.log("Cleared routes for new run");
+        });
+    }
+  }, [location.pathname]);
 
   const loadRuns = async () => {
     setIsLoadingRuns(true);
