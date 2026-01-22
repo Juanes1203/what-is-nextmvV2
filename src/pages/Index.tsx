@@ -146,9 +146,10 @@ const Index = () => {
     loadRuns();
   }, []);
 
-  // Reset state when navigating to /new route
+  // Reset state when navigating to /new route or when component mounts on /new
   useEffect(() => {
     if (location.pathname === "/new") {
+      // Reset all state for new optimization
       setIsNewRunMode(true);
       setSelectedRunId(null);
       setSelectedRunData(null);
@@ -162,9 +163,12 @@ const Index = () => {
         .gte("created_at", "1970-01-01")
         .then(() => {
           console.log("Cleared routes for new run");
+        })
+        .catch((error) => {
+          console.error("Error clearing routes:", error);
         });
     }
-  }, [location.pathname]);
+  }, [location.pathname, location.state]);
 
   const loadRuns = async () => {
     setIsLoadingRuns(true);

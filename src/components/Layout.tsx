@@ -1,4 +1,4 @@
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Play, History, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -9,6 +9,16 @@ interface LayoutProps {
 
 const Layout = ({ children }: LayoutProps) => {
   const location = useLocation();
+  const navigate = useNavigate();
+
+  const handleNewOptimization = () => {
+    if (location.pathname === "/new") {
+      // If already on /new, force a reset by navigating with a unique state
+      navigate("/new", { state: { reset: Date.now() }, replace: true });
+    } else {
+      navigate("/new");
+    }
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -17,7 +27,7 @@ const Layout = ({ children }: LayoutProps) => {
           <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" />
           <nav className="flex gap-2">
             <Button
-              asChild
+              onClick={handleNewOptimization}
               variant={location.pathname === "/" || location.pathname === "/new" ? "secondary" : "ghost"}
               size="sm"
               className={cn(
@@ -27,10 +37,8 @@ const Layout = ({ children }: LayoutProps) => {
                   : "hover:bg-primary-foreground/10"
               )}
             >
-              <Link to="/new">
-                <Play className="w-4 h-4 mr-2" />
-                Nueva Optimización
-              </Link>
+              <Play className="w-4 h-4 mr-2" />
+              Nueva Optimización
             </Button>
             <Button
               asChild
