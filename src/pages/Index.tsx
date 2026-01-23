@@ -1266,9 +1266,15 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
   const loadVehicles = async () => {
     const { data, error } = await supabase.from("vehicles").select("*");
     if (error) {
-      console.error("Error loading vehicles:", error);
+      console.error("Error loading vehicles from database:", error);
+      toast({
+        title: "Error",
+        description: "No se pudieron cargar los vehículos desde la base de datos",
+        variant: "destructive",
+      });
       return;
     }
+    console.log(`Loaded ${data?.length || 0} vehicles from database`);
     setVehicles(data || []);
   };
 
@@ -1563,7 +1569,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       let processedRows = 0;
       let skippedRows = 0;
       
-      // Map to track occurrences: key -> { lat, lon, count, occurrences, person_ids, grupo, nombre, direccion }
+      // Map to track occurrences: key -> { lat, lon, count, occurrences, person_ids, grupo, nombres, direccion }
       const occurrenceMap: Record<string, {
         latitude: number;
         longitude: number;
@@ -1571,7 +1577,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         occurrences: number[]; // Track each occurrence for debugging
         person_ids: string[]; // Track person IDs at this location
         grupo?: string; // Store grupo if available
-        nombre?: string; // Store nombre if available
+        nombres: string[]; // Store all names at this location
         direccion?: string; // Store direccion if available
       }> = {};
       
@@ -1638,13 +1644,13 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           if (personId && !occurrenceMap[key].person_ids.includes(personId)) {
             occurrenceMap[key].person_ids.push(personId);
           }
+          // Add nombre if available and not already in the list
+          if (nombre && !occurrenceMap[key].nombres.includes(nombre)) {
+            occurrenceMap[key].nombres.push(nombre);
+          }
           // Update grupo if available (use first non-empty value found)
           if (grupo && !occurrenceMap[key].grupo) {
             occurrenceMap[key].grupo = grupo;
-          }
-          // Update nombre if available (use first non-empty value found)
-          if (nombre && !occurrenceMap[key].nombre) {
-            occurrenceMap[key].nombre = nombre;
           }
           // Update direccion if available (use first non-empty value found)
           if (direccion && !occurrenceMap[key].direccion) {
@@ -1660,8 +1666,8 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
             count: 1, // Start with 1 occurrence
             occurrences: [1], // Track first occurrence
             person_ids: personId ? [personId] : [], // Store person_id if available
+            nombres: nombre ? [nombre] : [], // Store nombre if available
             grupo: grupo || undefined, // Store grupo if available
-            nombre: nombre || undefined, // Store nombre if available
             direccion: direccion || undefined, // Store direccion if available
           };
           processedRows++;
@@ -1702,7 +1708,9 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           ? (item.person_ids.length === 1 ? item.person_ids[0] : item.person_ids.join(", "))
           : undefined, // Store single person_id or comma-separated if multiple
         grupo: item.grupo, // Store grupo if available
-        nombre: item.nombre, // Store nombre if available
+        nombre: item.nombres.length > 0 
+          ? (item.nombres.length === 1 ? item.nombres[0] : item.nombres.join(", ")) 
+          : undefined, // Store single nombre or comma-separated if multiple
         direccion: item.direccion, // Store direccion if available
       }));
       
@@ -1773,7 +1781,8 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         const lat = point.latitude;
         const lon = point.longitude;
         
-        // Use nombre for name if available, otherwise default
+        // Use nombre(s) for name if available, otherwise default
+        // nombre can be comma-separated if multiple people share the point
         const name = point.nombre || `Punto ${index + 1}`;
         // Use direccion for address if available, otherwise use coordinates
         const address = point.direccion || `${lat}, ${lon}`;
@@ -2399,14 +2408,16 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       .single();
 
     if (error) {
+      console.error("Error adding vehicle to database:", error);
       toast({
         title: "Error",
-        description: "No se pudo agregar el vehículo",
+        description: `No se pudo agregar el vehículo: ${error.message || "Error desconocido"}`,
         variant: "destructive",
       });
       return;
     }
 
+    console.log("Vehicle successfully added to database:", data);
     setVehicles([...vehicles, data]);
     setIsVehicleDialogOpen(false);
     
@@ -2426,9 +2437,10 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       .eq("id", vehicleId);
 
     if (error) {
+      console.error("Error updating vehicle in database:", error);
       toast({
         title: "Error",
-        description: "No se pudo actualizar el vehículo",
+        description: `No se pudo actualizar el vehículo: ${error.message || "Error desconocido"}`,
         variant: "destructive",
       });
       return;
@@ -2441,7 +2453,10 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       .single();
 
     if (data) {
+      console.log("Vehicle successfully updated in database:", data);
       setVehicles(vehicles.map((v) => (v.id === vehicleId ? data : v)));
+    } else {
+      console.warn("Vehicle updated but could not reload from database");
     }
   };
 
