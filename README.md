@@ -1,92 +1,79 @@
-# Welcome to your Lovable project
+# Optimizador de Rutas - Nextmv
 
-## Project info
+Aplicación web para optimización de rutas de recogida utilizando Nextmv API, integrada con Supabase para almacenamiento de datos.
 
-**URL**: https://lovable.dev/projects/78f4098e-c2aa-43b9-96ba-83ac7bb596df
+## 🌐 Acceso a la Aplicación
 
-## How can I edit this code?
+**URL de Producción**: [https://optimizadorv2-4c1mqpjlf-ontrack1.vercel.app/new](https://optimizadorv2-4c1mqpjlf-ontrack1.vercel.app/new)
 
-There are several ways of editing your application.
+## 🚀 Características
 
-**Use Lovable**
+- **Gestión de Puntos de Recogida**: Agregar, editar y eliminar puntos de recogida
+- **Búsqueda de Estudiantes**: Buscar estudiantes por nombre, dirección o ID
+- **Gestión de Múltiples Personas**: Editar individualmente a las personas que comparten un punto
+- **Configuración de Vehículos**: Definir vehículos con capacidad y restricciones
+- **Optimización de Rutas**: Generar rutas optimizadas usando Nextmv API
+- **Visualización en Mapa**: Ver rutas y puntos de recogida en un mapa interactivo
+- **Historial de Optimizaciones**: Revisar ejecuciones anteriores
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/78f4098e-c2aa-43b9-96ba-83ac7bb596df) and start prompting.
+## 🛠️ Tecnologías
 
-Changes made via Lovable will be committed automatically to this repo.
+- **Frontend**: React + TypeScript
+- **Build Tool**: Vite
+- **UI Components**: shadcn-ui
+- **Styling**: Tailwind CSS
+- **Base de Datos**: Supabase (PostgreSQL)
+- **API de Optimización**: Nextmv
+- **Mapas**: Mapbox GL
 
-**Use your preferred IDE**
+## 📦 Instalación Local
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
+### Requisitos
 
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+- Node.js (recomendado usar [nvm](https://github.com/nvm-sh/nvm#installing-and-updating))
+- npm o yarn
 
-Follow these steps:
+### Pasos
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+```bash
+# 1. Clonar el repositorio
+git clone https://github.com/Juanes1203/what-is-nextmvV2.git
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+# 2. Navegar al directorio del proyecto
+cd what-is-nextmvV2
 
-# Step 3: Install the necessary dependencies.
-npm i
+# 3. Instalar dependencias
+npm install
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
+# 4. Configurar variables de entorno
+# Crear archivo .env con las siguientes variables:
+# VITE_SUPABASE_URL=tu_url_de_supabase
+# VITE_SUPABASE_PUBLISHABLE_KEY=tu_clave_publica
+# VITE_NEXTMV_API_KEY=tu_clave_de_nextmv
+
+# 5. Iniciar servidor de desarrollo
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+## 🚀 Despliegue
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+### Vercel (Recomendado)
 
-**Use GitHub Codespaces**
-
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
-
-## What technologies are used for this project?
-
-This project is built with:
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-### 🚀 Despliegue en Vercel (La opción más sencilla)
-
-**Ver la guía completa en [DEPLOY.md](./DEPLOY.md)**
+Ver la guía completa en [DEPLOY.md](./DEPLOY.md)
 
 **Resumen rápido:**
-1. Sube tu código a GitHub
-2. Ve a [vercel.com](https://vercel.com) e inicia sesión con GitHub
-3. Haz clic en "Add New Project" y selecciona tu repositorio
-4. Agrega las variables de entorno:
+1. Conecta tu repositorio de GitHub a Vercel
+2. Agrega las variables de entorno:
    - `VITE_SUPABASE_URL`
    - `VITE_SUPABASE_PUBLISHABLE_KEY`
    - `VITE_NEXTMV_API_KEY`
-5. Haz clic en "Deploy"
-6. ¡Listo! 🎉
+3. Vercel detectará automáticamente que es un proyecto Vite y lo desplegará
 
-**Nota**: Vercel detectará automáticamente que es un proyecto Vite y lo configurará correctamente.
+## 📚 Documentación Adicional
 
-### Otras opciones
+- [Guía de Despliegue](./DEPLOY.md) - Instrucciones detalladas para desplegar en Vercel
+- [Configuración de Supabase](./SETUP_SUPABASE.md) - Configuración de la base de datos
 
-- **Lovable**: Simply open [Lovable](https://lovable.dev/projects/78f4098e-c2aa-43b9-96ba-83ac7bb596df) and click on Share -> Publish.
+## 📝 Licencia
 
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+Este proyecto es privado.
