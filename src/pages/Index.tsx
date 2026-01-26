@@ -3659,6 +3659,19 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       // Initialize all routes as visible
       setVisibleRoutes(new Set(routesFromSolution.map((_, index) => index)));
 
+      // CRITICAL: Set selectedRunData and selectedRunId so export functions work
+      // Store the complete run data for Excel/KML export
+      if (runId) {
+        setSelectedRunId(runId);
+        console.log("Setting selectedRunId:", runId);
+      }
+      // Store the complete data object (which contains output.solutions)
+      setSelectedRunData(data);
+      console.log("Setting selectedRunData with solutions:", {
+        hasSolutions: !!(data.output?.solutions || data.solutions),
+        solutionCount: (data.output?.solutions || data.solutions)?.length || 0
+      });
+
       toast({
         title: "Rutas optimizadas",
         description: "Las rutas han sido calculadas exitosamente",
