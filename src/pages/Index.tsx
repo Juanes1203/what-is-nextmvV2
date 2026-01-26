@@ -1973,8 +1973,12 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           latitude: lat,
           longitude: lon,
           quantity: quantity, // ALWAYS include quantity - it's the consolidated count
-          grupo: pointData.grupo, // Include grupo if available
         };
+        
+        // Only include grupo if it exists and has a value (column may not exist in Supabase)
+        if (pointData.grupo !== undefined && pointData.grupo !== null && pointData.grupo !== "") {
+          baseData.grupo = pointData.grupo;
+        }
         
         // Always include person_id if it was set (even if empty string means column existed but was empty)
         // Only skip if it's undefined (column didn't exist in Excel)
@@ -2128,9 +2132,34 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         console.warn("Supabase no disponible, usando solo localStorage:", error);
       }
 
-      // If error about quantity column in Supabase, that's OK - we have it in localStorage
-      if (insertError && (insertError.code === "PGRST204" || insertError.message?.includes("quantity"))) {
-        console.warn("⚠️ Supabase no tiene columna 'quantity', pero los datos están guardados en localStorage con cantidad");
+      // If error about quantity or grupo column in Supabase, that's OK - we have it in localStorage
+      if (insertError && (insertError.code === "PGRST204" || insertError.message?.includes("quantity") || insertError.message?.includes("grupo"))) {
+        if (insertError.message?.includes("grupo")) {
+          console.warn("⚠️ Supabase no tiene columna 'grupo', pero los datos están guardados en localStorage");
+        } else {
+          console.warn("⚠️ Supabase no tiene columna 'quantity', pero los datos están guardados en localStorage con cantidad");
+        }
+        // Try to insert again without grupo column
+        if (insertError.message?.includes("grupo")) {
+          console.log("🔄 Reintentando inserción sin columna 'grupo'...");
+          const dataWithoutGrupo = allDataToInsert.map(({ grupo, ...rest }) => rest);
+          try {
+            const retryAttempt = await supabase
+              .from("pickup_points")
+              .insert(dataWithoutGrupo)
+              .select();
+            
+            if (retryAttempt.data && retryAttempt.data.length > 0) {
+              console.log("✅ Éxito: Datos insertados correctamente en Supabase (sin grupo)");
+              insertedData = retryAttempt.data;
+              insertError = null;
+            } else if (retryAttempt.error) {
+              console.error("❌ Error al reintentar inserción:", retryAttempt.error);
+            }
+          } catch (retryError) {
+            console.error("❌ Error al reintentar inserción:", retryError);
+          }
+        }
       } else if (insertError) {
         console.error("❌ ERROR CRÍTICO EN SUPABASE:", insertError);
         console.error("Los datos se guardaron en localStorage pero NO en Supabase");
@@ -2419,12 +2448,16 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           }
         }
 
-        const vehicle: Vehicle = {
+        const vehicle: any = {
           name: placa,
           capacity: Math.floor(capacidad),
           max_distance: distanciaMax,
-          grupo: grupo || undefined, // Include grupo if available
         };
+        
+        // Only include grupo if it exists and has a value (column may not exist in Supabase)
+        if (grupo !== undefined && grupo !== null && grupo !== "") {
+          vehicle.grupo = grupo;
+        }
 
         // Add locations if provided
         if (startLocation) {
@@ -2470,6 +2503,34 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
 
         if (insertError) {
           console.error("Error inserting vehicles:", insertError);
+          
+          // If error is about grupo column, try again without it
+          if (insertError.code === "PGRST204" && insertError.message?.includes("grupo")) {
+            console.log("🔄 Reintentando inserción de vehículos sin columna 'grupo'...");
+            const vehiclesWithoutGrupo = vehiclesToInsert.map(({ grupo, ...rest }: any) => rest);
+            try {
+              const retryAttempt = await supabase
+                .from("vehicles")
+                .insert(vehiclesWithoutGrupo)
+                .select();
+              
+              if (retryAttempt.data && retryAttempt.data.length > 0) {
+                console.log("✅ Éxito: Vehículos insertados correctamente en Supabase (sin grupo)");
+                // Update state with retry data
+                setVehicles(retryAttempt.data);
+                toast({
+                  title: "Vehículos cargados",
+                  description: `Se cargaron ${retryAttempt.data.length} vehículos exitosamente`,
+                });
+                return;
+              } else if (retryAttempt.error) {
+                console.error("❌ Error al reintentar inserción de vehículos:", retryAttempt.error);
+              }
+            } catch (retryError) {
+              console.error("❌ Error al reintentar inserción de vehículos:", retryError);
+            }
+          }
+          
           // Still update state even if Supabase fails
         } else {
           console.log("Vehicles inserted into Supabase:", insertedData);
