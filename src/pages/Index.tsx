@@ -3709,14 +3709,16 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           }
           
           // Extract route information from the vehicle object
-          const routeData = {
+          // NOTE: nextmv_run_ids column does NOT exist in routes table, so don't include it
+          const routeData: any = {
             vehicle_id: originalVehicle?.id || null,
             route_data: vehicle,
             total_distance: vehicle.route_travel_distance || 0,
             total_duration: vehicle.route_travel_duration || vehicle.route_duration || 0,
-            nextmv_run_ids: runId ? [runId] : [], // Store current run ID to filter routes later
             // Note: person_assignments column doesn't exist in the routes table
             // If needed, this data can be stored in route_data JSON field
+            // Note: nextmv_run_ids column doesn't exist, so we can't filter by run ID
+            // Instead, we delete all routes before inserting new ones
           };
 
           routeInserts.push(
@@ -3731,6 +3733,15 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         
         if (insertErrors.length > 0) {
           console.error(`Error inserting ${insertErrors.length} routes:`, insertErrors);
+          // Log first error details
+          if (insertErrors[0]?.error) {
+            console.error("First error details:", {
+              message: insertErrors[0].error.message,
+              code: insertErrors[0].error.code,
+              details: insertErrors[0].error.details,
+              hint: insertErrors[0].error.hint
+            });
+          }
         }
         
         console.log(`Insert results: ${successfulInserts.length} successful, ${insertErrors.length} failed out of ${routeInserts.length} total`);
@@ -3813,48 +3824,25 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         let routesData: any[] = [];
         let routesError: any = null;
         
-        if (runId) {
-          // Load routes that match the current run ID
-          // Try multiple methods to filter by nextmv_run_ids
-          let result = await supabase
-            .from("routes")
-            .select("*")
-            .contains("nextmv_run_ids", [runId]) // Filter by current run ID
-            .order("created_at", { ascending: false });
-          
-          if (result.error || !result.data || result.data.length === 0) {
-            // Try alternative filter syntax
-            console.log("🔄 Intentando método alternativo de filtrado por runId...");
-            result = await supabase
-              .from("routes")
-              .select("*")
-              .filter("nextmv_run_ids", "cs", `{${runId}}`) // Contains operator: array contains value
-              .order("created_at", { ascending: false });
-          }
-          
-          routesData = result.data || [];
-          routesError = result.error;
-          
-          console.log(`📊 Loading routes from database for run ${runId}: Expected ${expectedRoutes}, Got ${routesData.length}`);
-          
-          if (routesData.length > expectedRoutes) {
-            console.warn(`⚠️ ADVERTENCIA: Se encontraron ${routesData.length} rutas pero se esperaban ${expectedRoutes}. Puede haber rutas antiguas.`);
-            // Filter to only the most recent routes matching the expected count
-            routesData = routesData.slice(0, expectedRoutes);
-            console.log(`🔧 Filtrando a las ${routesData.length} rutas más recientes.`);
-          }
-        } else {
-          // If no runId, load only the most recent routes (last 50)
-          const result = await supabase
-            .from("routes")
-            .select("*")
-            .order("created_at", { ascending: false })
-            .limit(50);
-          
-          routesData = result.data || [];
-          routesError = result.error;
-          
-          console.log(`📊 Loading recent routes from database (no runId): Got ${routesData.length}`);
+        // Since nextmv_run_ids column may not exist, load only the most recent routes
+        // The delete before insert should have cleared old routes, so we just need the newest ones
+        const routesToLoad = Math.max(expectedRoutes, 50); // Load at least expectedRoutes, but cap at 50
+        
+        const result = await supabase
+          .from("routes")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(routesToLoad);
+        
+        routesData = result.data || [];
+        routesError = result.error;
+        
+        console.log(`📊 Loading routes from database: Expected ${expectedRoutes}, Got ${routesData.length}`);
+        
+        // If we got more routes than expected, limit to expected count (most recent)
+        if (routesData.length > expectedRoutes) {
+          console.warn(`⚠️ ADVERTENCIA: Se encontraron ${routesData.length} rutas pero se esperaban ${expectedRoutes}. Limitando a las ${expectedRoutes} más recientes.`);
+          routesData = routesData.slice(0, expectedRoutes);
         }
         
         if (!routesError && routesData && routesData.length > 0) {
