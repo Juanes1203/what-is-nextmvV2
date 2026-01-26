@@ -1805,9 +1805,13 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         // Log for debugging
         if (item.students.length > 0) {
           console.log(`[CONSOLIDATION] Point at ${item.latitude}, ${item.longitude}:`, {
-            students: item.students,
+            students: item.students.map(s => ({ name: s.name, person_id: s.person_id, person_id_type: typeof s.person_id })),
             names: names,
-            personIds: personIds
+            personIds: personIds,
+            personIds_types: personIds.map(id => typeof id),
+            final_person_id: personIds.length > 0 
+              ? (personIds.length === 1 ? personIds[0] : personIds.join(", "))
+              : (personIdColumnExisted ? "" : undefined)
           });
         }
         
@@ -2012,6 +2016,20 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       // Log what we're about to insert
       console.log("=== ANTES DE INSERTAR ===");
       console.log(`Total puntos a insertar: ${allDataToInsert.length}`);
+      
+      // CRITICAL: Log person_id for first few points to verify it's being included
+      console.log("=== VERIFICACIÓN DE PERSON_ID ANTES DE INSERTAR ===");
+      allDataToInsert.slice(0, 5).forEach((p, idx) => {
+        console.log(`Punto ${idx + 1}:`, {
+          name: p.name,
+          person_id: p.person_id,
+          person_id_type: typeof p.person_id,
+          person_id_in_object: 'person_id' in p,
+          has_person_id: p.person_id !== undefined && p.person_id !== null,
+          all_keys: Object.keys(p)
+        });
+      });
+      
       const pointsWithQty = allDataToInsert.filter(p => p.quantity > 1);
       console.log(`Puntos con cantidad > 1: ${pointsWithQty.length}`);
       if (pointsWithQty.length > 0) {
@@ -2019,7 +2037,8 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           name: p.name,
           lat: p.latitude,
           lon: p.longitude,
-          quantity: p.quantity
+          quantity: p.quantity,
+          person_id: p.person_id
         })));
       } else {
         console.warn("⚠️ ADVERTENCIA: No hay puntos con cantidad > 1 para insertar");
@@ -2052,6 +2071,11 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       let insertError: any = null;
       
       try {
+        // Log the exact data being sent to Supabase
+        console.log("=== DATOS ENVIADOS A SUPABASE ===");
+        console.log(`Total registros: ${allDataToInsert.length}`);
+        console.log("Primeros 3 registros completos:", JSON.stringify(allDataToInsert.slice(0, 3), null, 2));
+        
         const firstAttempt = await supabase
           .from("pickup_points")
           .insert(allDataToInsert)
@@ -2059,6 +2083,25 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         
         insertedData = firstAttempt.data;
         insertError = firstAttempt.error;
+        
+        // Log what Supabase returned
+        if (insertedData) {
+          console.log("=== DATOS RETORNADOS POR SUPABASE ===");
+          console.log(`Total registros insertados: ${insertedData.length}`);
+          insertedData.slice(0, 3).forEach((p: any, idx: number) => {
+            console.log(`Registro ${idx + 1} insertado:`, {
+              id: p.id,
+              name: p.name,
+              person_id: p.person_id,
+              person_id_type: typeof p.person_id,
+              person_id_is_null: p.person_id === null
+            });
+          });
+        }
+        
+        if (insertError) {
+          console.error("=== ERROR AL INSERTAR EN SUPABASE ===", insertError);
+        }
         
         if (insertedData) {
           console.log("=== TAMBIÉN GUARDADO EN SUPABASE ===");
