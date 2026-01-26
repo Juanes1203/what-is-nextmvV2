@@ -1627,7 +1627,8 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         const key = `${lat},${lon}`;
         
         // Extract person_id if available
-        const personId = personIdKey ? String(rowData[personIdKey] || "").trim() : undefined;
+        // If column exists, always extract (even if empty) - this way we know the column was in the Excel
+        const personId = personIdKey ? String(rowData[personIdKey] || "").trim() : null;
         // Extract grupo if available
         const grupo = grupoKey ? String(rowData[grupoKey] || "").trim() : undefined;
         // Extract nombre if available
@@ -1640,8 +1641,9 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           const oldCount = occurrenceMap[key].count;
           occurrenceMap[key].count += 1;
           occurrenceMap[key].occurrences.push(occurrenceMap[key].count);
-          // Add person_id if available and not already in the list
-          if (personId && !occurrenceMap[key].person_ids.includes(personId)) {
+          // Add person_id if available (even if empty string - means column existed in Excel)
+          // Only skip if personId is null (column didn't exist)
+          if (personId !== null && !occurrenceMap[key].person_ids.includes(personId)) {
             occurrenceMap[key].person_ids.push(personId);
           }
           // Add nombre if available and not already in the list
@@ -1665,7 +1667,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
             longitude: lon, // Store original value
             count: 1, // Start with 1 occurrence
             occurrences: [1], // Track first occurrence
-            person_ids: personId ? [personId] : [], // Store person_id if available
+            person_ids: personId !== null ? [personId] : [], // Store person_id if column existed (even if empty)
             nombres: nombre ? [nombre] : [], // Store nombre if available
             grupo: grupo || undefined, // Store grupo if available
             direccion: direccion || undefined, // Store direccion if available
@@ -1700,13 +1702,16 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       }
       
       // STEP 2: Convert occurrence map to consolidated points with quantities
+      // personIdKey tells us if the column existed in Excel
+      const personIdColumnExisted = !!personIdKey;
+      
       const uniquePoints: PointData[] = Object.values(occurrenceMap).map((item) => ({
         latitude: item.latitude,
         longitude: item.longitude,
         quantity: item.count, // Quantity = number of times this coordinate appeared
         person_id: item.person_ids.length > 0 
           ? (item.person_ids.length === 1 ? item.person_ids[0] : item.person_ids.join(", "))
-          : undefined, // Store single person_id or comma-separated if multiple
+          : (personIdColumnExisted ? "" : undefined), // Empty string if column existed but was empty, undefined if column didn't exist
         grupo: item.grupo, // Store grupo if available
         nombre: item.nombres.length > 0 
           ? (item.nombres.length === 1 ? item.nombres[0] : item.nombres.join(", ")) 
@@ -1850,7 +1855,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           latitude: lat,
           longitude: lon,
           quantity: quantity, // ALWAYS include quantity - it's the consolidated count
-          person_id: pointData.person_id, // Include person_id if available
+          person_id: pointData.person_id !== undefined ? pointData.person_id : null, // Always include person_id (even if empty string), null if column didn't exist
           grupo: pointData.grupo, // Include grupo if available
         };
         
@@ -2342,8 +2347,17 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         if (names.length > 0) {
           // If we have multiple names, create a row for each
           names.forEach((name, idx) => {
-            // Use person_id if available, otherwise use point.id as fallback
-            const studentId = personIds[idx] || point.id || "";
+            // Always use person_id from Excel if available (even if empty string)
+            // Only use point.id as fallback if person_id was never set (undefined/null)
+            let studentId = "";
+            if (point.person_id !== undefined && point.person_id !== null) {
+              // person_id exists (may be empty string, but it was in the Excel)
+              studentId = personIds[idx] || "";
+            } else {
+              // person_id was never set (column didn't exist in Excel), use point.id
+              studentId = point.id || "";
+            }
+            
             excelData.push({
               "id del punto": point.id || "",
               "id de pasajero": studentId,
@@ -2355,8 +2369,17 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           });
         } else {
           // Single entry (no name or empty name)
-          // Use person_id if available, otherwise use point.id as fallback
-          const studentId = point.person_id || point.id || "";
+          // Always use person_id from Excel if available (even if empty string)
+          // Only use point.id as fallback if person_id was never set (undefined/null)
+          let studentId = "";
+          if (point.person_id !== undefined && point.person_id !== null) {
+            // person_id exists (may be empty string, but it was in the Excel)
+            studentId = point.person_id;
+          } else {
+            // person_id was never set (column didn't exist in Excel), use point.id
+            studentId = point.id || "";
+          }
+          
           excelData.push({
             "id del punto": point.id || "",
             "id de pasajero": studentId,
