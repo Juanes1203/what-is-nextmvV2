@@ -2609,6 +2609,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       }
 
       // Insert new vehicles
+      let normalizedInsertedVehicles: Vehicle[] = vehiclesToInsert;
       try {
         const { data: insertedData, error: insertError } = await supabase
           .from("vehicles")
@@ -2630,8 +2631,36 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
               
               if (retryAttempt.data && retryAttempt.data.length > 0) {
                 console.log("✅ Éxito: Vehículos insertados correctamente en Supabase (sin grupo)");
-                // Update state with retry data
-                setVehicles(retryAttempt.data);
+                // Parse and normalize the inserted data
+                normalizedInsertedVehicles = (retryAttempt.data || []).map((v: any) => {
+                  const normalized: any = { ...v };
+                  // Parse start_location if it's a JSONB string
+                  if (v.start_location && typeof v.start_location === 'string') {
+                    try {
+                      normalized.start_location = JSON.parse(v.start_location);
+                    } catch (e) {
+                      console.warn(`Error parsing start_location for vehicle ${v.name}:`, e);
+                    }
+                  }
+                  // Parse end_location if it's a JSONB string
+                  if (v.end_location && typeof v.end_location === 'string') {
+                    try {
+                      normalized.end_location = JSON.parse(v.end_location);
+                    } catch (e) {
+                      console.warn(`Error parsing end_location for vehicle ${v.name}:`, e);
+                    }
+                  }
+                  return normalized;
+                });
+                setVehicles(normalizedInsertedVehicles);
+                
+                // Set currentVehicleStartLocation if any vehicle has start_location
+                const firstVehicleWithStartLocation = normalizedInsertedVehicles.find((v: any) => v.start_location);
+                if (firstVehicleWithStartLocation && firstVehicleWithStartLocation.start_location) {
+                  setCurrentVehicleStartLocation(firstVehicleWithStartLocation.start_location);
+                  console.log(`[EXCEL UPLOAD] Estableciendo currentVehicleStartLocation desde vehículo "${firstVehicleWithStartLocation.name}":`, firstVehicleWithStartLocation.start_location);
+                }
+                
                 toast({
                   title: "Vehículos cargados",
                   description: `Se cargaron ${retryAttempt.data.length} vehículos exitosamente`,
@@ -2646,15 +2675,43 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           }
           
           // Still update state even if Supabase fails
-        } else {
+        } else if (insertedData && insertedData.length > 0) {
           console.log("Vehicles inserted into Supabase:", insertedData);
+          // Parse and normalize the inserted data
+          normalizedInsertedVehicles = (insertedData || []).map((v: any) => {
+            const normalized: any = { ...v };
+            // Parse start_location if it's a JSONB string
+            if (v.start_location && typeof v.start_location === 'string') {
+              try {
+                normalized.start_location = JSON.parse(v.start_location);
+              } catch (e) {
+                console.warn(`Error parsing start_location for vehicle ${v.name}:`, e);
+              }
+            }
+            // Parse end_location if it's a JSONB string
+            if (v.end_location && typeof v.end_location === 'string') {
+              try {
+                normalized.end_location = JSON.parse(v.end_location);
+              } catch (e) {
+                console.warn(`Error parsing end_location for vehicle ${v.name}:`, e);
+              }
+            }
+            return normalized;
+          });
         }
       } catch (error) {
         console.warn("Supabase not available, using state only:", error);
       }
 
-      // Update state
-      setVehicles(vehiclesToInsert);
+      // Update state with normalized vehicles
+      setVehicles(normalizedInsertedVehicles);
+      
+      // Set currentVehicleStartLocation if any vehicle has start_location
+      const firstVehicleWithStartLocation = normalizedInsertedVehicles.find((v: any) => v.start_location);
+      if (firstVehicleWithStartLocation && firstVehicleWithStartLocation.start_location) {
+        setCurrentVehicleStartLocation(firstVehicleWithStartLocation.start_location);
+        console.log(`[EXCEL UPLOAD] Estableciendo currentVehicleStartLocation desde vehículo "${firstVehicleWithStartLocation.name}":`, firstVehicleWithStartLocation.start_location);
+      }
 
       toast({
         title: "Archivo cargado exitosamente",
