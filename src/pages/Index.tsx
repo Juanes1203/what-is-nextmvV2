@@ -2322,6 +2322,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       // Prepare data for Excel with the required columns
       // For points with multiple people (comma-separated names), we need to expand them
       const excelData: Array<{
+        "id del punto": string;
         "id de pasajero": string;
         "nombre": string;
         "dirección": string;
@@ -2334,12 +2335,18 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         const names = point.name ? point.name.split(',').map(n => n.trim()).filter(n => n) : [];
         // Split person_ids if comma-separated
         const personIds = point.person_id ? point.person_id.split(',').map(id => id.trim()).filter(id => id) : [];
+        
+        // Debug: log point data to verify person_id is being captured
+        console.log(`Point ${point.id}: name="${point.name}", person_id="${point.person_id}", names=${names.length}, personIds=${personIds.length}`);
 
         if (names.length > 0) {
           // If we have multiple names, create a row for each
           names.forEach((name, idx) => {
+            // Use person_id if available, otherwise use point.id as fallback
+            const studentId = personIds[idx] || point.id || "";
             excelData.push({
-              "id de pasajero": personIds[idx] || "", // Use corresponding person_id or empty
+              "id del punto": point.id || "",
+              "id de pasajero": studentId,
               "nombre": name,
               "dirección": point.address || `${point.latitude}, ${point.longitude}`,
               "latitud": point.latitude,
@@ -2348,8 +2355,11 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           });
         } else {
           // Single entry (no name or empty name)
+          // Use person_id if available, otherwise use point.id as fallback
+          const studentId = point.person_id || point.id || "";
           excelData.push({
-            "id de pasajero": point.person_id || "",
+            "id del punto": point.id || "",
+            "id de pasajero": studentId,
             "nombre": point.name || "",
             "dirección": point.address || `${point.latitude}, ${point.longitude}`,
             "latitud": point.latitude,
