@@ -1220,6 +1220,21 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         quantity: point.quantity != null && !isNaN(point.quantity) ? Number(point.quantity) : 1,
       }));
       
+      // Log person_id for debugging
+      if (data && data.length > 0) {
+        console.log("=== PERSON_ID DEBUG - LOADED FROM DATABASE ===");
+        data.slice(0, 10).forEach((p: any) => {
+          console.log(`Point "${p.name}":`, {
+            id: p.id,
+            person_id: p.person_id,
+            person_id_type: typeof p.person_id,
+            person_id_is_null: p.person_id === null,
+            person_id_is_undefined: p.person_id === undefined,
+            person_id_length: p.person_id ? p.person_id.length : 0
+          });
+        });
+      }
+      
       console.log("=== PUNTOS CARGADOS DESDE BD ===");
       console.log(`Total puntos cargados: ${normalizedData.length}`);
       const pointsWithQty = normalizedData.filter(p => p.quantity > 1);
@@ -1564,7 +1579,25 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         return;
       }
 
-      console.log("Columnas detectadas:", { latitudeKey, longitudeKey, quantityKey: quantityKey || "no encontrada", personIdKey: personIdKey || "no encontrada", grupoKey: grupoKey || "no encontrada", nombreKey: nombreKey || "no encontrada", direccionKey: direccionKey || "no encontrada" });
+      console.log("Columnas detectadas:", { 
+        latitudeKey, 
+        longitudeKey, 
+        quantityKey: quantityKey || "no encontrada", 
+        personIdKey: personIdKey || "no encontrada", 
+        grupoKey: grupoKey || "no encontrada", 
+        nombreKey: nombreKey || "no encontrada", 
+        direccionKey: direccionKey || "no encontrada",
+        allKeys: allKeys // Show all available keys for debugging
+      });
+      
+      if (personIdKey) {
+        console.log(`✅ Columna ID detectada: "${personIdKey}"`);
+        // Show sample of ID values from first few rows
+        const sampleIds = jsonData.slice(0, 5).map((row: any) => row[personIdKey]);
+        console.log(`Muestra de IDs de las primeras 5 filas:`, sampleIds);
+      } else {
+        console.warn("⚠️ ADVERTENCIA: No se detectó columna de ID. Buscando: 'id', 'person_id', 'persona id', etc.");
+      }
       console.log(`Total de filas en Excel: ${jsonData.length}`);
 
       // STEP 1: Read and process ALL rows first, counting occurrences
@@ -1635,7 +1668,13 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         
         // Extract person_id if available
         // If column exists, always extract (even if empty) - this way we know the column was in the Excel
+        // Convert to string to preserve the exact value from Excel (including numbers like 1031655840)
         const personId = personIdKey ? String(rowData[personIdKey] || "").trim() : null;
+        
+        // Debug: log first few rows to verify ID extraction
+        if (processedRows < 3 && personIdKey) {
+          console.log(`[EXCEL READ] Row ${processedRows + 1}: ID column="${personIdKey}", value="${rowData[personIdKey]}", extracted="${personId}"`);
+        }
         // Extract grupo if available
         const grupo = grupoKey ? String(rowData[grupoKey] || "").trim() : undefined;
         // Extract nombre if available
@@ -1654,16 +1693,20 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           occurrenceMap[key].occurrences.push(occurrenceMap[key].count);
           
           // Add student (name + ID pair) if not already in the list
-          // Check if this exact combination already exists
+          // Check if this exact combination already exists (same name AND same ID)
           const studentExists = occurrenceMap[key].students.some(
-            s => s.name === studentName && s.person_id === (studentId || "")
+            s => s.name === studentName && s.person_id === (studentId !== null ? studentId : "")
           );
           
           if (!studentExists) {
+            const finalStudentId = studentId !== null ? studentId : ""; // Empty string if column existed but was empty
+            console.log(`[GROUPING] Adding student to point ${key}: name="${studentName}", person_id="${finalStudentId}"`);
             occurrenceMap[key].students.push({
               name: studentName,
-              person_id: studentId !== null ? studentId : "" // Empty string if column existed but was empty
+              person_id: finalStudentId
             });
+          } else {
+            console.log(`[GROUPING] Student already exists at point ${key}: name="${studentName}"`);
           }
           
           // Update grupo if available (use first non-empty value found)
@@ -1678,6 +1721,10 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           console.log(`[DUPLICADO ENCONTRADO] Clave: ${key}, Cantidad anterior: ${oldCount}, Cantidad nueva: ${occurrenceMap[key].count}`);
         } else {
           // First time seeing these coordinates
+          const finalStudentId = studentId !== null ? studentId : ""; // Empty string if column existed but was empty
+          if (studentName) {
+            console.log(`[GROUPING] Creating new point ${key}: name="${studentName}", person_id="${finalStudentId}"`);
+          }
           occurrenceMap[key] = {
             latitude: lat, // Store original value
             longitude: lon, // Store original value
@@ -1685,7 +1732,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
             occurrences: [1], // Track first occurrence
             students: studentName ? [{
               name: studentName,
-              person_id: studentId !== null ? studentId : "" // Empty string if column existed but was empty
+              person_id: finalStudentId
             }] : [], // Store student (name + ID pair)
             grupo: grupo || undefined, // Store grupo if available
             direccion: direccion || undefined, // Store direccion if available
@@ -1725,8 +1772,18 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       
       const uniquePoints: PointData[] = Object.values(occurrenceMap).map((item) => {
         // Extract names and person_ids maintaining 1:1 relationship
+        // Keep all person_ids (including empty strings) to maintain index correspondence with names
         const names = item.students.map(s => s.name).filter(n => n);
-        const personIds = item.students.map(s => s.person_id).filter(id => id !== null);
+        const personIds = item.students.map(s => s.person_id); // Don't filter - keep all including empty strings
+        
+        // Log for debugging
+        if (item.students.length > 0) {
+          console.log(`[CONSOLIDATION] Point at ${item.latitude}, ${item.longitude}:`, {
+            students: item.students,
+            names: names,
+            personIds: personIds
+          });
+        }
         
         return {
           latitude: item.latitude,
@@ -1873,15 +1930,34 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         // Quantity is the consolidated count (number of times this coordinate appeared)
           const quantity = Math.max(1, Math.floor(pointData.quantity || 1));
         
+        // Prepare person_id: if column existed in Excel, always include it (even if empty string)
+        // If column didn't exist, don't include the field (let it be null in DB)
         const baseData: any = {
             name: pointData.name,
             address: pointData.address,
           latitude: lat,
           longitude: lon,
           quantity: quantity, // ALWAYS include quantity - it's the consolidated count
-          person_id: pointData.person_id !== undefined ? pointData.person_id : null, // Always include person_id (even if empty string), null if column didn't exist
           grupo: pointData.grupo, // Include grupo if available
         };
+        
+        // Always include person_id if it was set (even if empty string means column existed but was empty)
+        // Only skip if it's undefined (column didn't exist in Excel)
+        if (pointData.person_id !== undefined) {
+          baseData.person_id = pointData.person_id; // Can be empty string or actual ID
+        }
+        // If undefined, don't set person_id field (will be null in DB, indicating column didn't exist)
+        
+        // Log for debugging - log ALL points, not just those with person_id
+        console.log(`[INSERT] Preparing point for database:`, {
+          name: pointData.name,
+          person_id: pointData.person_id,
+          person_id_type: typeof pointData.person_id,
+          person_id_is_null: pointData.person_id === null,
+          person_id_is_undefined: pointData.person_id === undefined,
+          lat: lat,
+          lon: lon
+        });
         
         if (quantity > 1) {
           console.log(`🔵 PUNTO CON CANTIDAD > 1: ${pointData.name} - Lat: ${lat}, Lon: ${lon}, Cantidad: ${quantity}`);
@@ -2362,26 +2438,47 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       pickupPoints.forEach((point) => {
         // Split names if comma-separated
         const names = point.name ? point.name.split(',').map(n => n.trim()).filter(n => n) : [];
-        // Split person_ids if comma-separated - preserve empty strings to maintain index correspondence
+        // Split person_ids if comma-separated - preserve ALL values including empty strings
+        // This maintains the 1:1 correspondence with names
         const personIds = point.person_id !== undefined && point.person_id !== null
           ? point.person_id.split(',').map(id => id.trim())
           : [];
         
         // Debug: log point data to verify person_id is being captured
-        console.log(`Point ${point.id}: name="${point.name}", person_id="${point.person_id}", names=${names.length}, personIds=${personIds.length}`);
+        console.log(`[EXPORT] Point ${point.id}:`, {
+          name: point.name,
+          person_id: point.person_id,
+          person_id_type: typeof point.person_id,
+          person_id_is_null: point.person_id === null,
+          person_id_is_undefined: point.person_id === undefined,
+          names_count: names.length,
+          personIds_count: personIds.length,
+          personIds: personIds
+        });
+        if (personIds.length > 0) {
+          console.log(`[EXPORT] personIds array:`, personIds);
+        }
 
         if (names.length > 0) {
           // If we have multiple names, create a row for each
           names.forEach((name, idx) => {
             // Get corresponding person_id by index
-            // If person_id column existed in Excel, use it (even if empty string)
-            // If column didn't exist, use point.id as fallback
+            // CRITICAL: If point has a name (came from Excel), assume ID column existed
+            // Only use point.id as fallback if point has no name (manually added, not from Excel)
             let studentId = "";
             if (point.person_id !== undefined && point.person_id !== null) {
               // person_id column existed in Excel - use the corresponding ID by index
+              // If index is out of bounds or value is empty, use empty string (not point.id)
               studentId = personIds[idx] !== undefined ? personIds[idx] : "";
+            } else if (point.name && point.name.trim()) {
+              // Point has a name (came from Excel) but person_id is null/undefined
+              // This means ID column existed but was empty, or Supabase converted empty string to null
+              // Use empty string instead of point.id
+              console.warn(`[EXPORT] Point "${point.name}" has null/undefined person_id but has name - assuming ID column existed but was empty`);
+              studentId = "";
             } else {
-              // person_id column didn't exist in Excel - use point.id as fallback
+              // Point has no name (manually added, not from Excel) - use point.id as fallback
+              console.warn(`[EXPORT] Point ${point.id} has no person_id and no name - using point.id as fallback`);
               studentId = point.id || "";
             }
             
@@ -2396,14 +2493,21 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           });
         } else {
           // Single entry (no name or empty name)
-          // Always use person_id from Excel if available (even if empty string)
-          // Only use point.id as fallback if person_id was never set (undefined/null)
+          // CRITICAL: If point has a name (came from Excel), assume ID column existed
+          // Only use point.id as fallback if point has no name (manually added, not from Excel)
           let studentId = "";
           if (point.person_id !== undefined && point.person_id !== null) {
             // person_id exists (may be empty string, but it was in the Excel)
             studentId = point.person_id;
+          } else if (point.name && point.name.trim()) {
+            // Point has a name (came from Excel) but person_id is null/undefined
+            // This means ID column existed but was empty, or Supabase converted empty string to null
+            // Use empty string instead of point.id
+            console.warn(`[EXPORT] Point "${point.name}" has null/undefined person_id but has name - assuming ID column existed but was empty`);
+            studentId = "";
           } else {
-            // person_id was never set (column didn't exist in Excel), use point.id
+            // Point has no name (manually added, not from Excel) - use point.id
+            console.warn(`[EXPORT] Point ${point.id} has no person_id and no name - using point.id as fallback`);
             studentId = point.id || "";
           }
           
