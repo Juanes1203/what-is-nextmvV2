@@ -1308,6 +1308,21 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       return;
     }
     console.log(`Loaded ${data?.length || 0} vehicles from database`);
+    
+    // Log start_location for each vehicle to verify it's being loaded correctly
+    if (data && data.length > 0) {
+      console.log("=== VEHICLE START_LOCATION DEBUG ===");
+      data.forEach((v: any, idx: number) => {
+        console.log(`Vehicle ${idx + 1} "${v.name}":`, {
+          id: v.id,
+          has_start_location: !!v.start_location,
+          start_location: v.start_location,
+          start_location_type: typeof v.start_location,
+          start_location_is_object: v.start_location && typeof v.start_location === 'object'
+        });
+      });
+    }
+    
     setVehicles(data || []);
   };
 
@@ -3047,20 +3062,37 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           };
         }),
         vehicles: (vehicles.length > 0 ? vehicles : []).map((vehicle, index) => {
-          // Get start location from vehicle config, first pickup point, or default
+          // Get start location from vehicle config ONLY
+          // CRITICAL: Never use a pickup point as start location - vehicle must have its own start_location
           let startLocation: { lon: number; lat: number };
-          if (vehicle.start_location) {
-            startLocation = vehicle.start_location;
-          } else if (pickupPoints[0] && pickupPoints[0].longitude && pickupPoints[0].latitude) {
+          
+          // Parse start_location if it's a JSONB string from database
+          let parsedStartLocation = vehicle.start_location;
+          if (parsedStartLocation && typeof parsedStartLocation === 'string') {
+            try {
+              parsedStartLocation = JSON.parse(parsedStartLocation);
+            } catch (e) {
+              console.warn(`Error parsing start_location for vehicle ${vehicle.name}:`, e);
+            }
+          }
+          
+          if (parsedStartLocation && parsedStartLocation.lon !== undefined && parsedStartLocation.lat !== undefined) {
             startLocation = {
-              lon: Number(parseFloat(String(pickupPoints[0].longitude))),
-              lat: Number(parseFloat(String(pickupPoints[0].latitude)))
+              lon: Number(parseFloat(String(parsedStartLocation.lon))),
+              lat: Number(parseFloat(String(parsedStartLocation.lat)))
             };
+            console.log(`✅ Vehículo "${vehicle.name}" usando start_location:`, startLocation);
           } else {
-            // Use default location if no points available (for preview)
+            // If vehicle doesn't have start_location, throw error or use a default
+            // Don't use pickup points as fallback - that's incorrect behavior
+            if (!skipValidation) {
+              throw new Error(`El vehículo "${vehicle.name || vehicle.id || `vehículo ${index + 1}`}" no tiene una ubicación de inicio configurada. Por favor configura la ubicación de inicio del vehículo haciendo clic en el botón de ubicación en el mapa.`);
+            }
+            // For preview only, use a default location (but this should not happen in real optimization)
+            console.warn(`⚠️ Vehículo "${vehicle.name || vehicle.id}" no tiene start_location - usando ubicación por defecto (esto no debería pasar)`);
             startLocation = {
-              lon: 0,
-              lat: 0
+              lon: -74.0721, // Default Bogotá coordinates
+              lat: 4.7110
             };
           }
           
