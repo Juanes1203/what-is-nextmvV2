@@ -141,7 +141,8 @@ const Index = () => {
   }, [routes]);
 
   useEffect(() => {
-    loadPickupPoints();
+    // Always load from Supabase first (not localStorage) to get current data
+    loadPickupPoints(true); // Force load from Supabase
     loadVehicles();
     loadRuns();
   }, []);
@@ -3626,10 +3627,19 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       try {
         
         // Clear old routes before inserting new ones
-        await supabase
+        // CRITICAL: Delete all routes to avoid showing old routes from previous optimizations
+        console.log("🗑️ Eliminando todas las rutas antiguas antes de insertar nuevas...");
+        const { error: deleteRoutesError, count: deletedCount } = await supabase
           .from("routes")
           .delete()
-          .gte("created_at", "1970-01-01");
+          .gte("created_at", "1970-01-01")
+          .select("*", { count: 'exact', head: true });
+        
+        if (deleteRoutesError) {
+          console.warn("⚠️ Error al eliminar rutas antiguas (continuando de todas formas):", deleteRoutesError);
+        } else {
+          console.log(`✅ Rutas antiguas eliminadas antes de insertar nuevas`);
+        }
         
         // Helper function to extract person_id from encoded stop ID
         // Format: {point.id}__person_{person_id} or just {point.id}
@@ -3704,6 +3714,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
             route_data: vehicle,
             total_distance: vehicle.route_travel_distance || 0,
             total_duration: vehicle.route_travel_duration || vehicle.route_duration || 0,
+            nextmv_run_ids: runId ? [runId] : [], // Store current run ID to filter routes later
             // Note: person_assignments column doesn't exist in the routes table
             // If needed, this data can be stored in route_data JSON field
           };
@@ -3737,6 +3748,11 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         // Don't throw - we still want to show the results even if saving fails
       }
 
+      // Clear old routes before showing new ones
+      console.log("🗑️ Limpiando rutas antiguas antes de mostrar nuevas...");
+      setRoutes([]);
+      setVisibleRoutes(new Set());
+      
       // Immediately render routes from the solution data instead of waiting for database
       // Filter to one route per vehicle (same logic as handleRunSelect)
       const seenVehicles = new Set<string | null>();
@@ -3789,17 +3805,57 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
 
       // In the background, wait for database to commit, then reload routes from database
       // This ensures we have the proper IDs and database records
+      // CRITICAL: Only load routes from the current run, not all routes
       setTimeout(async () => {
         const expectedRoutes = (solution.vehicles || []).length;
-        const routesToLoad = Math.max(expectedRoutes * 2, vehicles.length * 2, 200);
         
-        let { data: routesData, error: routesError } = await supabase
-          .from("routes")
-          .select("*")
-          .order("created_at", { ascending: false })
-          .limit(routesToLoad);
+        // Only load routes from the current run if we have a runId
+        let routesData: any[] = [];
+        let routesError: any = null;
         
-        console.log(`Loading routes from database: Expected ${expectedRoutes}, Got ${routesData?.length || 0}`);
+        if (runId) {
+          // Load routes that match the current run ID
+          // Try multiple methods to filter by nextmv_run_ids
+          let result = await supabase
+            .from("routes")
+            .select("*")
+            .contains("nextmv_run_ids", [runId]) // Filter by current run ID
+            .order("created_at", { ascending: false });
+          
+          if (result.error || !result.data || result.data.length === 0) {
+            // Try alternative filter syntax
+            console.log("🔄 Intentando método alternativo de filtrado por runId...");
+            result = await supabase
+              .from("routes")
+              .select("*")
+              .filter("nextmv_run_ids", "cs", `{${runId}}`) // Contains operator: array contains value
+              .order("created_at", { ascending: false });
+          }
+          
+          routesData = result.data || [];
+          routesError = result.error;
+          
+          console.log(`📊 Loading routes from database for run ${runId}: Expected ${expectedRoutes}, Got ${routesData.length}`);
+          
+          if (routesData.length > expectedRoutes) {
+            console.warn(`⚠️ ADVERTENCIA: Se encontraron ${routesData.length} rutas pero se esperaban ${expectedRoutes}. Puede haber rutas antiguas.`);
+            // Filter to only the most recent routes matching the expected count
+            routesData = routesData.slice(0, expectedRoutes);
+            console.log(`🔧 Filtrando a las ${routesData.length} rutas más recientes.`);
+          }
+        } else {
+          // If no runId, load only the most recent routes (last 50)
+          const result = await supabase
+            .from("routes")
+            .select("*")
+            .order("created_at", { ascending: false })
+            .limit(50);
+          
+          routesData = result.data || [];
+          routesError = result.error;
+          
+          console.log(`📊 Loading recent routes from database (no runId): Got ${routesData.length}`);
+        }
         
         if (!routesError && routesData && routesData.length > 0) {
           console.log(`Updating routes with database records. Route data:`, routesData.map(r => ({ id: r.id, vehicle_id: r.vehicle_id, has_route_data: !!r.route_data })));
