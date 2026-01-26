@@ -3276,8 +3276,7 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           };
         }),
         vehicles: (vehicles.length > 0 ? vehicles : []).map((vehicle, index) => {
-          // Get start location from vehicle config ONLY
-          // CRITICAL: Never use a pickup point as start location - vehicle must have its own start_location
+          // Get start location from vehicle config, or use first pickup point as fallback (como funcionaba antes)
           let startLocation: { lon: number; lat: number };
           
           // Parse start_location if it's a JSONB string from database
@@ -3295,15 +3294,20 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
               lon: Number(parseFloat(String(parsedStartLocation.lon))),
               lat: Number(parseFloat(String(parsedStartLocation.lat)))
             };
-            console.log(`✅ Vehículo "${vehicle.name}" usando start_location:`, startLocation);
+            console.log(`✅ Vehículo "${vehicle.name}" usando start_location configurada:`, startLocation);
+          } else if (pickupPoints.length > 0) {
+            // Fallback: use first pickup point as start location (como funcionaba antes)
+            startLocation = {
+              lon: Number(parseFloat(String(pickupPoints[0].longitude))),
+              lat: Number(parseFloat(String(pickupPoints[0].latitude)))
+            };
+            console.log(`⚠️ Vehículo "${vehicle.name || vehicle.id}" no tiene start_location - usando primer punto de recogida como inicio:`, startLocation);
           } else {
-            // If vehicle doesn't have start_location, throw error or use a default
-            // Don't use pickup points as fallback - that's incorrect behavior
+            // Last resort: use default Bogotá location
             if (!skipValidation) {
-              throw new Error(`El vehículo "${vehicle.name || vehicle.id || `vehículo ${index + 1}`}" no tiene una ubicación de inicio configurada. Por favor configura la ubicación de inicio del vehículo haciendo clic en el botón de ubicación en el mapa.`);
+              throw new Error(`No hay puntos de recogida disponibles y el vehículo "${vehicle.name || vehicle.id || `vehículo ${index + 1}`}" no tiene una ubicación de inicio configurada.`);
             }
-            // For preview only, use a default location (but this should not happen in real optimization)
-            console.warn(`⚠️ Vehículo "${vehicle.name || vehicle.id}" no tiene start_location - usando ubicación por defecto (esto no debería pasar)`);
+            console.warn(`⚠️ Vehículo "${vehicle.name || vehicle.id}" no tiene start_location y no hay puntos - usando ubicación por defecto`);
             startLocation = {
               lon: -74.0721, // Default Bogotá coordinates
               lat: 4.7110

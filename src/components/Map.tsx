@@ -277,15 +277,34 @@ const Map = ({ pickupPoints, routes, vehicles = [], visibleRoutes, onRouteVisibi
       markersRef.current.push(endMarker);
     }
 
-    // Add markers for each vehicle with start_location
+    // Add markers for each vehicle
     // This ensures vehicles are visible on the map even when page is reloaded
     if (vehicles && vehicles.length > 0) {
       vehicles.forEach((vehicle, index) => {
+        // Determine vehicle location: use start_location if available, otherwise use first pickup point
+        let vehicleLocation: { lon: number; lat: number } | null = null;
+        let locationSource = "";
+        
         if (vehicle.start_location && vehicle.start_location.lon && vehicle.start_location.lat) {
+          vehicleLocation = {
+            lon: vehicle.start_location.lon,
+            lat: vehicle.start_location.lat
+          };
+          locationSource = "configurada";
+        } else if (pickupPoints.length > 0) {
+          // Use first pickup point as vehicle location (como funcionaba antes)
+          vehicleLocation = {
+            lon: pickupPoints[0].longitude,
+            lat: pickupPoints[0].latitude
+          };
+          locationSource = "primer punto de recogida";
+        }
+        
+        if (vehicleLocation) {
           // Only add marker if it's not already shown as vehicleStartLocation
           const isAlreadyShown = vehicleStartLocation && 
-            Math.abs(vehicleStartLocation.lon - vehicle.start_location.lon) < 0.0001 &&
-            Math.abs(vehicleStartLocation.lat - vehicle.start_location.lat) < 0.0001;
+            Math.abs(vehicleStartLocation.lon - vehicleLocation.lon) < 0.0001 &&
+            Math.abs(vehicleStartLocation.lat - vehicleLocation.lat) < 0.0001;
           
           if (!isAlreadyShown) {
             const vehicleEl = document.createElement("div");
@@ -293,13 +312,13 @@ const Map = ({ pickupPoints, routes, vehicles = [], visibleRoutes, onRouteVisibi
             vehicleEl.textContent = vehicle.name.charAt(0).toUpperCase() || `V${index + 1}`;
             
             const vehicleMarker = new mapboxgl.Marker(vehicleEl)
-              .setLngLat([vehicle.start_location.lon, vehicle.start_location.lat])
+              .setLngLat([vehicleLocation.lon, vehicleLocation.lat])
               .setPopup(
                 new mapboxgl.Popup({ offset: 25 }).setHTML(
                   `<div class="p-2">
                     <h3 class="font-bold text-blue-600">${vehicle.name}</h3>
-                    <p class="text-sm">Ubicación de inicio</p>
-                    <p class="text-xs text-muted-foreground">${vehicle.start_location.lat.toFixed(6)}, ${vehicle.start_location.lon.toFixed(6)}</p>
+                    <p class="text-sm">Ubicación: ${locationSource}</p>
+                    <p class="text-xs text-muted-foreground">${vehicleLocation.lat.toFixed(6)}, ${vehicleLocation.lon.toFixed(6)}</p>
                   </div>`
                 )
               )
