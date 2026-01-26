@@ -1161,38 +1161,43 @@ const Index = () => {
     }
   };
 
-  const loadPickupPoints = async () => {
-    // Try localStorage first (works without Supabase)
-    try {
-      const stored = localStorage.getItem('pickup_points');
-      if (stored) {
-        const data = JSON.parse(stored);
-        const normalizedData = (data || []).map((point: any) => ({
-          ...point,
-          quantity: point.quantity != null && !isNaN(point.quantity) ? Number(point.quantity) : 1,
-        }));
-        console.log("=== PUNTOS CARGADOS DESDE LOCALSTORAGE ===");
-        console.log(`Total puntos cargados: ${normalizedData.length}`);
-        const pointsWithQty = normalizedData.filter(p => p.quantity > 1);
-        console.log(`Puntos con cantidad > 1: ${pointsWithQty.length}`);
-        
-        if (pointsWithQty.length > 0) {
-          console.log("Ejemplos de puntos con cantidad > 1:", pointsWithQty.slice(0, 5).map(p => ({
-            name: p.name,
-            lat: p.latitude,
-            lon: p.longitude,
-            quantity: p.quantity
-          })));
+  const loadPickupPoints = async (forceFromSupabase: boolean = false) => {
+    // If forceFromSupabase is true, skip localStorage and go directly to Supabase
+    if (!forceFromSupabase) {
+      // Try localStorage first (works without Supabase)
+      try {
+        const stored = localStorage.getItem('pickup_points');
+        if (stored) {
+          const data = JSON.parse(stored);
+          const normalizedData = (data || []).map((point: any) => ({
+            ...point,
+            quantity: point.quantity != null && !isNaN(point.quantity) ? Number(point.quantity) : 1,
+          }));
+          console.log("=== PUNTOS CARGADOS DESDE LOCALSTORAGE ===");
+          console.log(`Total puntos cargados: ${normalizedData.length}`);
+          const pointsWithQty = normalizedData.filter(p => p.quantity > 1);
+          console.log(`Puntos con cantidad > 1: ${pointsWithQty.length}`);
+          
+          if (pointsWithQty.length > 0) {
+            console.log("Ejemplos de puntos con cantidad > 1:", pointsWithQty.slice(0, 5).map(p => ({
+              name: p.name,
+              lat: p.latitude,
+              lon: p.longitude,
+              quantity: p.quantity
+            })));
+          }
+          
+          setPickupPoints(normalizedData);
+          return;
         }
-        
-        setPickupPoints(normalizedData);
-        return;
+      } catch (error) {
+        console.warn("Error loading from localStorage, trying Supabase:", error);
       }
-    } catch (error) {
-      console.warn("Error loading from localStorage, trying Supabase:", error);
+    } else {
+      console.log("🔄 Forzando carga desde Supabase (ignorando localStorage)");
     }
 
-    // Fallback to Supabase if available
+    // Fallback to Supabase if available (or forced)
     try {
     const { data, error } = await supabase.from("pickup_points").select("*");
     if (error) {
@@ -2076,20 +2081,6 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         console.log(`Total registros: ${allDataToInsert.length}`);
         console.log("Primeros 3 registros completos:", JSON.stringify(allDataToInsert.slice(0, 3), null, 2));
         
-        // Validate data before sending
-        const invalidPoints = allDataToInsert.filter((p: any) => 
-          !p.name || p.latitude === undefined || p.longitude === undefined
-        );
-        if (invalidPoints.length > 0) {
-          console.error("⚠️ Puntos inválidos detectados antes de insertar:", invalidPoints);
-        }
-        
-        // Check if Supabase client is available
-        if (!supabase) {
-          throw new Error("Cliente de Supabase no disponible");
-        }
-        
-        console.log("Intentando insertar en Supabase...");
         const firstAttempt = await supabase
           .from("pickup_points")
           .insert(allDataToInsert)
@@ -2117,9 +2108,15 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           console.error("=== ERROR AL INSERTAR EN SUPABASE ===", insertError);
           console.error("Detalles del error:", {
             message: insertError.message,
-            code: insertError.code,
             details: insertError.details,
-            hint: insertError.hint
+            hint: insertError.hint,
+            code: insertError.code
+          });
+          // Show error to user
+          toast({
+            title: "Error al guardar en Supabase",
+            description: insertError.message || "No se pudieron guardar los puntos en la base de datos",
+            variant: "destructive",
           });
         }
         
@@ -2128,30 +2125,18 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           console.log(`Total insertados en Supabase: ${insertedData.length}`);
         }
       } catch (error) {
-        console.error("=== EXCEPCIÓN AL INTENTAR INSERTAR EN SUPABASE ===", error);
-        insertError = error as any;
+        console.warn("Supabase no disponible, usando solo localStorage:", error);
       }
 
-      // Handle errors and show user feedback
-      if (insertError) {
-        // If error about quantity column in Supabase, that's OK - we have it in localStorage
-        if (insertError.code === "PGRST204" || insertError.message?.includes("quantity")) {
-          console.warn("⚠️ Supabase no tiene columna 'quantity', pero los datos están guardados en localStorage con cantidad");
-        } else {
-          // Show error to user
-          console.error("Error al insertar en Supabase:", insertError);
-          toast({
-            title: "Advertencia",
-            description: `Los puntos se guardaron en el navegador, pero hubo un error al guardar en la base de datos: ${insertError.message || "Error desconocido"}`,
-            variant: "destructive",
-          });
-        }
+      // If error about quantity column in Supabase, that's OK - we have it in localStorage
+      if (insertError && (insertError.code === "PGRST204" || insertError.message?.includes("quantity"))) {
+        console.warn("⚠️ Supabase no tiene columna 'quantity', pero los datos están guardados en localStorage con cantidad");
+      } else if (insertError) {
+        console.error("❌ ERROR CRÍTICO EN SUPABASE:", insertError);
+        console.error("Los datos se guardaron en localStorage pero NO en Supabase");
+        // Don't show toast here - already shown above
       } else if (insertedData && insertedData.length > 0) {
-        // Success - data was inserted into Supabase
-        console.log(`✅ ${insertedData.length} puntos guardados exitosamente en Supabase`);
-      } else {
-        // No error but no data returned - might be a silent failure
-        console.warn("⚠️ No se recibieron datos de Supabase después del insert, pero tampoco hubo error explícito");
+        console.log("✅ Éxito: Datos insertados correctamente en Supabase");
       }
 
       const insertedCount = pointsWithIds.length;
@@ -2186,8 +2171,15 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         console.warn("⚠️ PUNTO ESPECÍFICO DEL USUARIO NO ENCONTRADO EN INSERTADOS");
       }
 
-      // Reload pickup points to get updated list (from localStorage)
-      await loadPickupPoints();
+      // Reload pickup points to get updated list
+      // If Supabase insert was successful, force reload from Supabase; otherwise from localStorage
+      if (insertedData && insertedData.length > 0) {
+        console.log("🔄 Recargando puntos desde Supabase después de inserción exitosa");
+        await loadPickupPoints(true); // Force load from Supabase
+      } else {
+        console.log("🔄 Recargando puntos desde localStorage (Supabase insert falló o no disponible)");
+        await loadPickupPoints(false); // Load from localStorage
+      }
       
       // Verify points were saved correctly
       const savedPoints = JSON.parse(localStorage.getItem('pickup_points') || '[]');
@@ -2207,17 +2199,10 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         ? ` (${totalRows} filas → ${insertedCount} puntos únicos. ${consolidationDetails.join(", ")})`
         : ` (${totalRows} filas procesadas)`;
       
-        // Show success message - include Supabase status if available
-        const supabaseStatus = insertedData && insertedData.length > 0 
-          ? ` (${insertedData.length} guardados en base de datos)`
-          : insertError && insertError.code !== "PGRST204"
-          ? " (guardados solo en navegador)"
-          : "";
-        
         toast({
           title: "Archivo cargado exitosamente",
-          description: `Se agregaron ${insertedCount} puntos de recogida${consolidationMessage}${supabaseStatus}`,
-        });
+        description: `Se agregaron ${insertedCount} puntos de recogida${consolidationMessage}`,
+      });
       
       // Log final summary
       console.log("=== INSERCIÓN COMPLETADA ===");
