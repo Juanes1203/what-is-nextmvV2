@@ -1309,21 +1309,62 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
     }
     console.log(`Loaded ${data?.length || 0} vehicles from database`);
     
+    // Parse and normalize start_location/end_location from JSONB if needed
+    const normalizedVehicles = (data || []).map((v: any) => {
+      const normalized: any = { ...v };
+      
+      // Parse start_location if it's a JSON string
+      if (v.start_location) {
+        if (typeof v.start_location === 'string') {
+          try {
+            normalized.start_location = JSON.parse(v.start_location);
+          } catch (e) {
+            console.warn(`Error parsing start_location for vehicle ${v.name}:`, e);
+            normalized.start_location = null;
+          }
+        }
+        // If it's already an object, ensure it has lon and lat
+        if (normalized.start_location && typeof normalized.start_location === 'object') {
+          // Check if it's a valid location object
+          if (normalized.start_location.lon === undefined || normalized.start_location.lat === undefined) {
+            console.warn(`Vehicle ${v.name} has invalid start_location structure:`, normalized.start_location);
+            normalized.start_location = null;
+          }
+        }
+      }
+      
+      // Parse end_location if it's a JSON string
+      if (v.end_location) {
+        if (typeof v.end_location === 'string') {
+          try {
+            normalized.end_location = JSON.parse(v.end_location);
+          } catch (e) {
+            console.warn(`Error parsing end_location for vehicle ${v.name}:`, e);
+            normalized.end_location = null;
+          }
+        }
+      }
+      
+      return normalized;
+    });
+    
     // Log start_location for each vehicle to verify it's being loaded correctly
-    if (data && data.length > 0) {
+    if (normalizedVehicles.length > 0) {
       console.log("=== VEHICLE START_LOCATION DEBUG ===");
-      data.forEach((v: any, idx: number) => {
+      normalizedVehicles.forEach((v: any, idx: number) => {
         console.log(`Vehicle ${idx + 1} "${v.name}":`, {
           id: v.id,
           has_start_location: !!v.start_location,
           start_location: v.start_location,
           start_location_type: typeof v.start_location,
-          start_location_is_object: v.start_location && typeof v.start_location === 'object'
+          start_location_lon: v.start_location?.lon,
+          start_location_lat: v.start_location?.lat,
+          start_location_is_object: v.start_location && typeof v.start_location === 'object' && !Array.isArray(v.start_location)
         });
       });
     }
     
-    setVehicles(data || []);
+    setVehicles(normalizedVehicles);
   };
 
   // Helper function to save points to localStorage
@@ -2879,9 +2920,27 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
   };
 
   const handleAddVehicle = async (vehicle: Vehicle) => {
+    // Prepare insert data, ensuring start_location and end_location are properly formatted
+    const insertData: any = {
+      name: vehicle.name,
+      capacity: vehicle.capacity,
+      max_distance: vehicle.max_distance,
+    };
+    
+    // Include start_location if it exists (as JSONB)
+    if (vehicle.start_location) {
+      insertData.start_location = vehicle.start_location;
+      console.log(`[ADD VEHICLE] Guardando start_location para nuevo vehículo:`, vehicle.start_location);
+    }
+    
+    // Include end_location if it exists (as JSONB)
+    if (vehicle.end_location) {
+      insertData.end_location = vehicle.end_location;
+    }
+    
     const { data, error } = await supabase
       .from("vehicles")
-      .insert([vehicle])
+      .insert([insertData])
       .select()
       .single();
 
@@ -2896,22 +2955,64 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
     }
 
     console.log("Vehicle successfully added to database:", data);
-    setVehicles([...vehicles, data]);
+    
+    // Parse start_location if it's a JSONB string
+    const normalizedData: any = { ...data };
+    if (data.start_location && typeof data.start_location === 'string') {
+      try {
+        normalizedData.start_location = JSON.parse(data.start_location);
+      } catch (e) {
+        console.warn("Error parsing start_location after insert:", e);
+      }
+    }
+    if (data.end_location && typeof data.end_location === 'string') {
+      try {
+        normalizedData.end_location = JSON.parse(data.end_location);
+      } catch (e) {
+        console.warn("Error parsing end_location after insert:", e);
+      }
+    }
+    
+    setVehicles([...vehicles, normalizedData]);
     setIsVehicleDialogOpen(false);
     
     // Update markers if vehicle has locations
-    if (vehicle.start_location) {
-      setCurrentVehicleStartLocation(vehicle.start_location);
+    if (normalizedData.start_location) {
+      setCurrentVehicleStartLocation(normalizedData.start_location);
     }
-    if (vehicle.end_location) {
-      setCurrentVehicleEndLocation(vehicle.end_location);
+    if (normalizedData.end_location) {
+      setCurrentVehicleEndLocation(normalizedData.end_location);
     }
   };
 
   const handleUpdateVehicle = async (vehicleId: string, vehicle: Vehicle) => {
+    // Prepare update data, ensuring start_location and end_location are properly formatted
+    const updateData: any = {
+      name: vehicle.name,
+      capacity: vehicle.capacity,
+      max_distance: vehicle.max_distance,
+    };
+    
+    // Include start_location if it exists (as JSONB)
+    if (vehicle.start_location) {
+      updateData.start_location = vehicle.start_location;
+      console.log(`[UPDATE VEHICLE] Guardando start_location para vehículo ${vehicleId}:`, vehicle.start_location);
+    } else {
+      // If start_location is not provided, set it to null to clear it
+      updateData.start_location = null;
+      console.log(`[UPDATE VEHICLE] Limpiando start_location para vehículo ${vehicleId}`);
+    }
+    
+    // Include end_location if it exists (as JSONB)
+    if (vehicle.end_location) {
+      updateData.end_location = vehicle.end_location;
+    } else {
+      updateData.end_location = null;
+    }
+    
     const { error } = await supabase
       .from("vehicles")
-      .update(vehicle)
+      .update(updateData)
       .eq("id", vehicleId);
 
     if (error) {
@@ -2932,7 +3033,25 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
 
     if (data) {
       console.log("Vehicle successfully updated in database:", data);
-      setVehicles(vehicles.map((v) => (v.id === vehicleId ? data : v)));
+      
+      // Parse start_location if it's a JSONB string
+      const normalizedData: any = { ...data };
+      if (data.start_location && typeof data.start_location === 'string') {
+        try {
+          normalizedData.start_location = JSON.parse(data.start_location);
+        } catch (e) {
+          console.warn("Error parsing start_location after update:", e);
+        }
+      }
+      if (data.end_location && typeof data.end_location === 'string') {
+        try {
+          normalizedData.end_location = JSON.parse(data.end_location);
+        } catch (e) {
+          console.warn("Error parsing end_location after update:", e);
+        }
+      }
+      
+      setVehicles(vehicles.map((v) => (v.id === vehicleId ? normalizedData : v)));
     } else {
       console.warn("Vehicle updated but could not reload from database");
     }
