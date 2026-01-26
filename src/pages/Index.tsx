@@ -1362,6 +1362,14 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
           start_location_is_object: v.start_location && typeof v.start_location === 'object' && !Array.isArray(v.start_location)
         });
       });
+      
+      // Set currentVehicleStartLocation to the first vehicle's start_location if available
+      // This ensures the map shows the vehicle's location
+      const firstVehicleWithStartLocation = normalizedVehicles.find((v: any) => v.start_location);
+      if (firstVehicleWithStartLocation && firstVehicleWithStartLocation.start_location) {
+        setCurrentVehicleStartLocation(firstVehicleWithStartLocation.start_location);
+        console.log(`[LOAD VEHICLES] Estableciendo currentVehicleStartLocation desde vehículo "${firstVehicleWithStartLocation.name}":`, firstVehicleWithStartLocation.start_location);
+      }
     }
     
     setVehicles(normalizedVehicles);
@@ -2927,15 +2935,30 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       max_distance: vehicle.max_distance,
     };
     
+    // CRITICAL: Use currentVehicleStartLocation if vehicle doesn't have start_location but we have one selected
+    // This ensures that if user selected location from map, it gets saved
+    let finalStartLocation = vehicle.start_location;
+    if (!finalStartLocation && currentVehicleStartLocation) {
+      finalStartLocation = currentVehicleStartLocation;
+      console.log(`[ADD VEHICLE] Usando currentVehicleStartLocation para nuevo vehículo:`, currentVehicleStartLocation);
+    }
+    
     // Include start_location if it exists (as JSONB)
-    if (vehicle.start_location) {
-      insertData.start_location = vehicle.start_location;
-      console.log(`[ADD VEHICLE] Guardando start_location para nuevo vehículo:`, vehicle.start_location);
+    if (finalStartLocation) {
+      insertData.start_location = finalStartLocation;
+      console.log(`[ADD VEHICLE] Guardando start_location para nuevo vehículo:`, finalStartLocation);
+    }
+    
+    // CRITICAL: Use currentVehicleEndLocation if vehicle doesn't have end_location but we have one selected
+    let finalEndLocation = vehicle.end_location;
+    if (!finalEndLocation && currentVehicleEndLocation) {
+      finalEndLocation = currentVehicleEndLocation;
+      console.log(`[ADD VEHICLE] Usando currentVehicleEndLocation para nuevo vehículo:`, currentVehicleEndLocation);
     }
     
     // Include end_location if it exists (as JSONB)
-    if (vehicle.end_location) {
-      insertData.end_location = vehicle.end_location;
+    if (finalEndLocation) {
+      insertData.end_location = finalEndLocation;
     }
     
     const { data, error } = await supabase
@@ -2993,19 +3016,34 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       max_distance: vehicle.max_distance,
     };
     
+    // CRITICAL: Use currentVehicleStartLocation if vehicle doesn't have start_location but we have one selected
+    // This ensures that if user selected location from map, it gets saved
+    let finalStartLocation = vehicle.start_location;
+    if (!finalStartLocation && currentVehicleStartLocation) {
+      finalStartLocation = currentVehicleStartLocation;
+      console.log(`[UPDATE VEHICLE] Usando currentVehicleStartLocation para vehículo ${vehicleId}:`, currentVehicleStartLocation);
+    }
+    
     // Include start_location if it exists (as JSONB)
-    if (vehicle.start_location) {
-      updateData.start_location = vehicle.start_location;
-      console.log(`[UPDATE VEHICLE] Guardando start_location para vehículo ${vehicleId}:`, vehicle.start_location);
+    if (finalStartLocation) {
+      updateData.start_location = finalStartLocation;
+      console.log(`[UPDATE VEHICLE] Guardando start_location para vehículo ${vehicleId}:`, finalStartLocation);
     } else {
       // If start_location is not provided, set it to null to clear it
       updateData.start_location = null;
-      console.log(`[UPDATE VEHICLE] Limpiando start_location para vehículo ${vehicleId}`);
+      console.log(`[UPDATE VEHICLE] Limpiando start_location para vehículo ${vehicleId} (no hay start_location ni currentVehicleStartLocation)`);
+    }
+    
+    // CRITICAL: Use currentVehicleEndLocation if vehicle doesn't have end_location but we have one selected
+    let finalEndLocation = vehicle.end_location;
+    if (!finalEndLocation && currentVehicleEndLocation) {
+      finalEndLocation = currentVehicleEndLocation;
+      console.log(`[UPDATE VEHICLE] Usando currentVehicleEndLocation para vehículo ${vehicleId}:`, currentVehicleEndLocation);
     }
     
     // Include end_location if it exists (as JSONB)
-    if (vehicle.end_location) {
-      updateData.end_location = vehicle.end_location;
+    if (finalEndLocation) {
+      updateData.end_location = finalEndLocation;
     } else {
       updateData.end_location = null;
     }
