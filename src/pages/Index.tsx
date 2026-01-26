@@ -1215,9 +1215,15 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       
       // Normalize quantity field - preserve the actual quantity value from database
       // Only default to 1 if truly null/undefined, but keep the actual consolidated count
+      // Also handle person_id: if it's null but point has name (came from Excel), 
+      // Supabase may have converted empty string to null, so we preserve the null
+      // (we'll handle it in export logic)
     const normalizedData = (data || []).map((point: any) => ({
       ...point,
         quantity: point.quantity != null && !isNaN(point.quantity) ? Number(point.quantity) : 1,
+        // Keep person_id as is (can be null, empty string, or actual ID)
+        // We'll handle null in export logic by checking if point has name
+        person_id: point.person_id !== undefined ? point.person_id : null,
       }));
       
       // Log person_id for debugging
@@ -1230,7 +1236,9 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
             person_id_type: typeof p.person_id,
             person_id_is_null: p.person_id === null,
             person_id_is_undefined: p.person_id === undefined,
-            person_id_length: p.person_id ? p.person_id.length : 0
+            person_id_length: p.person_id ? p.person_id.length : 0,
+            has_name: !!p.name,
+            name_length: p.name ? p.name.length : 0
           });
         });
       }
@@ -1668,12 +1676,25 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         
         // Extract person_id if available
         // If column exists, always extract (even if empty) - this way we know the column was in the Excel
-        // Convert to string to preserve the exact value from Excel (including numbers like 1031655840)
-        const personId = personIdKey ? String(rowData[personIdKey] || "").trim() : null;
+        // CRITICAL: Preserve the exact value from Excel, handling both strings and numbers
+        let personId: string | null = null;
+        if (personIdKey) {
+          const rawValue = rowData[personIdKey];
+          // Handle different types: number, string, null, undefined
+          if (rawValue === null || rawValue === undefined) {
+            personId = ""; // Column exists but value is null/undefined - treat as empty string
+          } else if (typeof rawValue === 'number') {
+            // If it's a number (like 1031655840), convert to string without losing precision
+            personId = String(rawValue);
+          } else {
+            // It's a string, trim it
+            personId = String(rawValue).trim();
+          }
+        }
         
         // Debug: log first few rows to verify ID extraction
         if (processedRows < 3 && personIdKey) {
-          console.log(`[EXCEL READ] Row ${processedRows + 1}: ID column="${personIdKey}", value="${rowData[personIdKey]}", extracted="${personId}"`);
+          console.log(`[EXCEL READ] Row ${processedRows + 1}: ID column="${personIdKey}", raw value="${rowData[personIdKey]}", type="${typeof rowData[personIdKey]}", extracted="${personId}"`);
         }
         // Extract grupo if available
         const grupo = grupoKey ? String(rowData[grupoKey] || "").trim() : undefined;
@@ -1682,8 +1703,8 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         // Extract direccion if available
         const direccion = direccionKey ? String(rowData[direccionKey] || "").trim() : undefined;
         
-        // Extract person_id - use empty string if column exists but is empty, null if column doesn't exist
-        const studentId = personIdKey ? String(rowData[personIdKey] || "").trim() : null;
+        // Use the extracted personId as studentId
+        const studentId = personId;
         const studentName = nombre || "";
         
         if (occurrenceMap[key]) {
@@ -1774,7 +1795,12 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         // Extract names and person_ids maintaining 1:1 relationship
         // Keep all person_ids (including empty strings) to maintain index correspondence with names
         const names = item.students.map(s => s.name).filter(n => n);
-        const personIds = item.students.map(s => s.person_id); // Don't filter - keep all including empty strings
+        // Map person_ids - ensure we preserve the actual values from students
+        const personIds = item.students.map(s => {
+          // If person_id is null or undefined, convert to empty string if column existed
+          // This ensures we maintain the 1:1 relationship with names
+          return s.person_id !== null && s.person_id !== undefined ? s.person_id : "";
+        });
         
         // Log for debugging
         if (item.students.length > 0) {
@@ -1943,10 +1969,27 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         
         // Always include person_id if it was set (even if empty string means column existed but was empty)
         // Only skip if it's undefined (column didn't exist in Excel)
+        // CRITICAL: Always save person_id if column existed in Excel, even if empty
+        // Supabase may convert empty strings to null, but we'll handle that on load
         if (pointData.person_id !== undefined) {
-          baseData.person_id = pointData.person_id; // Can be empty string or actual ID
+          // person_id was set (can be string with ID, empty string, or null)
+          // If it's null but column existed, convert to empty string
+          if (pointData.person_id === null && personIdColumnExisted) {
+            baseData.person_id = ""; // Column existed but was null - save as empty string
+          } else if (pointData.person_id !== null) {
+            // It's a string (can be empty or have value) - save it as is
+            baseData.person_id = pointData.person_id;
+          } else {
+            // person_id is null and column didn't exist - don't set it (will be null in DB)
+            // This case shouldn't happen if logic is correct, but handle it anyway
+          }
+        } else if (personIdColumnExisted) {
+          // Column existed in Excel but person_id is undefined - this shouldn't happen
+          // but if it does, save as empty string to indicate column existed
+          console.warn(`[INSERT] person_id is undefined but column existed - saving as empty string for point: ${pointData.name}`);
+          baseData.person_id = "";
         }
-        // If undefined, don't set person_id field (will be null in DB, indicating column didn't exist)
+        // If undefined and column didn't exist, don't set person_id field (will be null in DB)
         
         // Log for debugging - log ALL points, not just those with person_id
         console.log(`[INSERT] Preparing point for database:`, {
