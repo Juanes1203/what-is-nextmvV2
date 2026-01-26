@@ -1526,10 +1526,12 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       const personIdKey = allKeys.find(
         key => {
           const normalized = key.toLowerCase().trim();
-          return normalized === "persona id" || normalized === "persona_id" || 
+          return normalized === "id" || // Simple "id" column (most common)
+                 normalized === "persona id" || normalized === "persona_id" || 
                  normalized === "person id" || normalized === "person_id" ||
                  normalized === "id persona" || normalized === "id_persona" ||
-                 normalized.includes("persona") && normalized.includes("id");
+                 normalized === "id de pasajero" || normalized === "id_pasajero" ||
+                 (normalized.includes("persona") && normalized.includes("id"));
         }
       );
       const grupoKey = allKeys.find(
@@ -1569,15 +1571,20 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       let processedRows = 0;
       let skippedRows = 0;
       
-      // Map to track occurrences: key -> { lat, lon, count, occurrences, person_ids, grupo, nombres, direccion }
+      // Map to track occurrences: key -> { lat, lon, count, occurrences, students (name+id pairs), grupo, direccion }
+      // We need to maintain 1:1 relationship between ID and name
+      interface Student {
+        name: string;
+        person_id: string;
+      }
+      
       const occurrenceMap: Record<string, {
         latitude: number;
         longitude: number;
         count: number; // Number of times this coordinate appears
         occurrences: number[]; // Track each occurrence for debugging
-        person_ids: string[]; // Track person IDs at this location
+        students: Student[]; // Track students (name + person_id pairs) to maintain 1:1 relationship
         grupo?: string; // Store grupo if available
-        nombres: string[]; // Store all names at this location
         direccion?: string; // Store direccion if available
       }> = {};
       
@@ -1636,20 +1643,29 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         // Extract direccion if available
         const direccion = direccionKey ? String(rowData[direccionKey] || "").trim() : undefined;
         
+        // Extract person_id - use empty string if column exists but is empty, null if column doesn't exist
+        const studentId = personIdKey ? String(rowData[personIdKey] || "").trim() : null;
+        const studentName = nombre || "";
+        
         if (occurrenceMap[key]) {
           // Increment count for duplicate coordinates
           const oldCount = occurrenceMap[key].count;
           occurrenceMap[key].count += 1;
           occurrenceMap[key].occurrences.push(occurrenceMap[key].count);
-          // Add person_id if available (even if empty string - means column existed in Excel)
-          // Only skip if personId is null (column didn't exist)
-          if (personId !== null && !occurrenceMap[key].person_ids.includes(personId)) {
-            occurrenceMap[key].person_ids.push(personId);
+          
+          // Add student (name + ID pair) if not already in the list
+          // Check if this exact combination already exists
+          const studentExists = occurrenceMap[key].students.some(
+            s => s.name === studentName && s.person_id === (studentId || "")
+          );
+          
+          if (!studentExists) {
+            occurrenceMap[key].students.push({
+              name: studentName,
+              person_id: studentId !== null ? studentId : "" // Empty string if column existed but was empty
+            });
           }
-          // Add nombre if available and not already in the list
-          if (nombre && !occurrenceMap[key].nombres.includes(nombre)) {
-            occurrenceMap[key].nombres.push(nombre);
-          }
+          
           // Update grupo if available (use first non-empty value found)
           if (grupo && !occurrenceMap[key].grupo) {
             occurrenceMap[key].grupo = grupo;
@@ -1667,8 +1683,10 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
             longitude: lon, // Store original value
             count: 1, // Start with 1 occurrence
             occurrences: [1], // Track first occurrence
-            person_ids: personId !== null ? [personId] : [], // Store person_id if column existed (even if empty)
-            nombres: nombre ? [nombre] : [], // Store nombre if available
+            students: studentName ? [{
+              name: studentName,
+              person_id: studentId !== null ? studentId : "" // Empty string if column existed but was empty
+            }] : [], // Store student (name + ID pair)
             grupo: grupo || undefined, // Store grupo if available
             direccion: direccion || undefined, // Store direccion if available
           };
@@ -1705,19 +1723,25 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       // personIdKey tells us if the column existed in Excel
       const personIdColumnExisted = !!personIdKey;
       
-      const uniquePoints: PointData[] = Object.values(occurrenceMap).map((item) => ({
-        latitude: item.latitude,
-        longitude: item.longitude,
-        quantity: item.count, // Quantity = number of times this coordinate appeared
-        person_id: item.person_ids.length > 0 
-          ? (item.person_ids.length === 1 ? item.person_ids[0] : item.person_ids.join(", "))
-          : (personIdColumnExisted ? "" : undefined), // Empty string if column existed but was empty, undefined if column didn't exist
-        grupo: item.grupo, // Store grupo if available
-        nombre: item.nombres.length > 0 
-          ? (item.nombres.length === 1 ? item.nombres[0] : item.nombres.join(", ")) 
-          : undefined, // Store single nombre or comma-separated if multiple
-        direccion: item.direccion, // Store direccion if available
-      }));
+      const uniquePoints: PointData[] = Object.values(occurrenceMap).map((item) => {
+        // Extract names and person_ids maintaining 1:1 relationship
+        const names = item.students.map(s => s.name).filter(n => n);
+        const personIds = item.students.map(s => s.person_id).filter(id => id !== null);
+        
+        return {
+          latitude: item.latitude,
+          longitude: item.longitude,
+          quantity: item.count, // Quantity = number of times this coordinate appeared
+          person_id: personIds.length > 0 
+            ? (personIds.length === 1 ? personIds[0] : personIds.join(", "))
+            : (personIdColumnExisted ? "" : undefined), // Empty string if column existed but was empty, undefined if column didn't exist
+          grupo: item.grupo, // Store grupo if available
+          nombre: names.length > 0 
+            ? (names.length === 1 ? names[0] : names.join(", ")) 
+            : undefined, // Store single nombre or comma-separated if multiple
+          direccion: item.direccion, // Store direccion if available
+        };
+      });
       
       // Verify quantities are being set correctly
       const pointsWithQtyGreaterThanOne = uniquePoints.filter(p => p.quantity > 1);
@@ -2338,8 +2362,10 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       pickupPoints.forEach((point) => {
         // Split names if comma-separated
         const names = point.name ? point.name.split(',').map(n => n.trim()).filter(n => n) : [];
-        // Split person_ids if comma-separated
-        const personIds = point.person_id ? point.person_id.split(',').map(id => id.trim()).filter(id => id) : [];
+        // Split person_ids if comma-separated - preserve empty strings to maintain index correspondence
+        const personIds = point.person_id !== undefined && point.person_id !== null
+          ? point.person_id.split(',').map(id => id.trim())
+          : [];
         
         // Debug: log point data to verify person_id is being captured
         console.log(`Point ${point.id}: name="${point.name}", person_id="${point.person_id}", names=${names.length}, personIds=${personIds.length}`);
@@ -2347,14 +2373,15 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
         if (names.length > 0) {
           // If we have multiple names, create a row for each
           names.forEach((name, idx) => {
-            // Always use person_id from Excel if available (even if empty string)
-            // Only use point.id as fallback if person_id was never set (undefined/null)
+            // Get corresponding person_id by index
+            // If person_id column existed in Excel, use it (even if empty string)
+            // If column didn't exist, use point.id as fallback
             let studentId = "";
             if (point.person_id !== undefined && point.person_id !== null) {
-              // person_id exists (may be empty string, but it was in the Excel)
-              studentId = personIds[idx] || "";
+              // person_id column existed in Excel - use the corresponding ID by index
+              studentId = personIds[idx] !== undefined ? personIds[idx] : "";
             } else {
-              // person_id was never set (column didn't exist in Excel), use point.id
+              // person_id column didn't exist in Excel - use point.id as fallback
               studentId = point.id || "";
             }
             
