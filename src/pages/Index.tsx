@@ -2308,6 +2308,80 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
     }
   };
 
+  const handleDownloadPickupPointsExcel = () => {
+    if (pickupPoints.length === 0) {
+      toast({
+        title: "Error",
+        description: "No hay puntos de recogida para descargar",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      // Prepare data for Excel with the required columns
+      // For points with multiple people (comma-separated names), we need to expand them
+      const excelData: Array<{
+        "id de pasajero": string;
+        "nombre": string;
+        "dirección": string;
+        "latitud": number;
+        "longitud": number;
+      }> = [];
+
+      pickupPoints.forEach((point) => {
+        // Split names if comma-separated
+        const names = point.name ? point.name.split(',').map(n => n.trim()).filter(n => n) : [];
+        // Split person_ids if comma-separated
+        const personIds = point.person_id ? point.person_id.split(',').map(id => id.trim()).filter(id => id) : [];
+
+        if (names.length > 0) {
+          // If we have multiple names, create a row for each
+          names.forEach((name, idx) => {
+            excelData.push({
+              "id de pasajero": personIds[idx] || "", // Use corresponding person_id or empty
+              "nombre": name,
+              "dirección": point.address || `${point.latitude}, ${point.longitude}`,
+              "latitud": point.latitude,
+              "longitud": point.longitude,
+            });
+          });
+        } else {
+          // Single entry (no name or empty name)
+          excelData.push({
+            "id de pasajero": point.person_id || "",
+            "nombre": point.name || "",
+            "dirección": point.address || `${point.latitude}, ${point.longitude}`,
+            "latitud": point.latitude,
+            "longitud": point.longitude,
+          });
+        }
+      });
+
+      // Create workbook and worksheet
+      const worksheet = XLSX.utils.json_to_sheet(excelData);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Puntos de Recogida");
+
+      // Generate Excel file and download
+      const timestamp = new Date().toISOString().split('T')[0].replace(/-/g, '');
+      const filename = `puntos_recogida_${timestamp}.xlsx`;
+      XLSX.writeFile(workbook, filename);
+
+      toast({
+        title: "Descarga completada",
+        description: `Archivo ${filename} descargado exitosamente con ${excelData.length} registro(s)`,
+      });
+    } catch (error) {
+      console.error("Error exporting pickup points to Excel:", error);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "No se pudo exportar el archivo Excel",
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleMapClick = async (lng: number, lat: number) => {
     // Handle vehicle location selection
     if (vehicleLocationMode && vehicleLocationCallback) {
@@ -3506,35 +3580,46 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
                               Agregar Punto
                             </Button>
                             {pickupPoints.length > 0 && (
-                              <AlertDialog open={isDeleteAllPointsDialogOpen} onOpenChange={setIsDeleteAllPointsDialogOpen}>
-                                <AlertDialogTrigger asChild>
-                                  <Button
-                                    variant="destructive"
-                                    size="sm"
-                                    className="px-3 whitespace-nowrap flex-shrink-0"
-                                  >
-                                    <Trash2 className="w-4 h-4 mr-1.5" />
-                                    Eliminar Todos
-                                  </Button>
-                                </AlertDialogTrigger>
-                                <AlertDialogContent>
-                                  <AlertDialogHeader>
-                                    <AlertDialogTitle>¿Eliminar todos los puntos?</AlertDialogTitle>
-                                    <AlertDialogDescription>
-                                      ¿Estás seguro de que deseas eliminar todos los {pickupPoints.length} puntos de recogida? Esta acción no se puede deshacer.
-                                    </AlertDialogDescription>
-                                  </AlertDialogHeader>
-                                  <AlertDialogFooter>
-                                    <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                    <AlertDialogAction
-                                      onClick={handleDeleteAllPickupPoints}
-                                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                              <>
+                                <Button
+                                  onClick={handleDownloadPickupPointsExcel}
+                                  variant="outline"
+                                  size="sm"
+                                  className="px-3 whitespace-nowrap flex-shrink-0"
+                                >
+                                  <Download className="w-4 h-4 mr-1.5" />
+                                  Descargar Excel
+                                </Button>
+                                <AlertDialog open={isDeleteAllPointsDialogOpen} onOpenChange={setIsDeleteAllPointsDialogOpen}>
+                                  <AlertDialogTrigger asChild>
+                                    <Button
+                                      variant="destructive"
+                                      size="sm"
+                                      className="px-3 whitespace-nowrap flex-shrink-0"
                                     >
+                                      <Trash2 className="w-4 h-4 mr-1.5" />
                                       Eliminar Todos
-                                    </AlertDialogAction>
-                                  </AlertDialogFooter>
-                                </AlertDialogContent>
-                              </AlertDialog>
+                                    </Button>
+                                  </AlertDialogTrigger>
+                                  <AlertDialogContent>
+                                    <AlertDialogHeader>
+                                      <AlertDialogTitle>¿Eliminar todos los puntos?</AlertDialogTitle>
+                                      <AlertDialogDescription>
+                                        ¿Estás seguro de que deseas eliminar todos los {pickupPoints.length} puntos de recogida? Esta acción no se puede deshacer.
+                                      </AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter>
+                                      <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                      <AlertDialogAction
+                                        onClick={handleDeleteAllPickupPoints}
+                                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                                      >
+                                        Eliminar Todos
+                                      </AlertDialogAction>
+                                    </AlertDialogFooter>
+                                  </AlertDialogContent>
+                                </AlertDialog>
+                              </>
                             )}
                           </div>
                         </CardHeader>
