@@ -1199,11 +1199,15 @@ const Index = () => {
 
     // Fallback to Supabase if available (or forced)
     try {
-    const { data, error } = await supabase.from("pickup_points").select("*");
+    const { data, error, count } = await supabase
+      .from("pickup_points")
+      .select("*", { count: 'exact' });
     if (error) {
       console.error("Error loading pickup points:", error);
       return;
     }
+    
+    console.log(`📊 Total de puntos en Supabase: ${count || data?.length || 0}`);
       
       // Check if quantity column exists by checking if any point has the quantity property
       const hasQuantityColumn = data && data.length > 0 && data.some((p: any) => 'quantity' in p);
@@ -1468,20 +1472,40 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
 
   const handleExcelUpload = async (file: File) => {
     try {
-      // First, delete all existing pickup points
-      const { error: deleteError } = await supabase
+      // First, delete all existing pickup points from Supabase
+      console.log("🗑️ Eliminando puntos existentes de Supabase...");
+      const { data: deletedData, error: deleteError } = await supabase
         .from("pickup_points")
         .delete()
-        .neq("id", "00000000-0000-0000-0000-000000000000"); // Delete all (using a condition that always matches)
+        .neq("id", "00000000-0000-0000-0000-000000000000") // Delete all (using a condition that always matches)
+        .select(); // Select to see what was deleted
       
       if (deleteError) {
-        console.error("Error deleting existing points:", deleteError);
-        // Continue anyway, might be empty table
+        console.error("❌ Error deleting existing points:", deleteError);
+        // Try alternative delete method
+        console.log("🔄 Intentando método alternativo de eliminación...");
+        const { error: altDeleteError } = await supabase
+          .from("pickup_points")
+          .delete()
+          .gte("created_at", "1970-01-01"); // Delete all records
+        
+        if (altDeleteError) {
+          console.error("❌ Error con método alternativo:", altDeleteError);
+          // Continue anyway - might be empty table or permission issue
+        } else {
+          console.log("✅ Puntos eliminados con método alternativo");
+        }
       } else {
-        console.log("Puntos existentes eliminados");
-        // Clear the state
-        setPickupPoints([]);
+        const deletedCount = deletedData?.length || 0;
+        console.log(`✅ ${deletedCount} puntos existentes eliminados de Supabase`);
       }
+      
+      // Also clear localStorage
+      localStorage.removeItem('pickup_points');
+      console.log("✅ localStorage limpiado");
+      
+      // Clear the state
+      setPickupPoints([]);
 
       // Dynamically import xlsx library
       // @ts-ignore - xlsx types may not be available until package is installed
@@ -2205,6 +2229,31 @@ ADD COLUMN IF NOT EXISTS quantity INTEGER DEFAULT 1;
       if (insertedData && insertedData.length > 0) {
         console.log("🔄 Recargando puntos desde Supabase después de inserción exitosa");
         await loadPickupPoints(true); // Force load from Supabase
+        
+        // Verify count in database
+        try {
+          const { count, error: countError } = await supabase
+            .from("pickup_points")
+            .select("*", { count: 'exact', head: true });
+          
+          if (!countError) {
+            console.log(`📊 Verificación: Total de puntos en Supabase después de inserción: ${count || 0}`);
+            if (count && count > insertedData.length) {
+              console.warn(`⚠️ ADVERTENCIA: Hay ${count} puntos en Supabase pero solo se insertaron ${insertedData.length}. Puede haber puntos antiguos que no se eliminaron.`);
+              toast({
+                title: "Advertencia",
+                description: `Se insertaron ${insertedData.length} puntos, pero hay ${count} en total. Puede haber puntos antiguos.`,
+                variant: "destructive",
+              });
+            } else if (count === insertedData.length) {
+              console.log(`✅ Verificación exitosa: ${count} puntos en Supabase, coincide con los insertados.`);
+            }
+          } else {
+            console.warn("Error al verificar conteo:", countError);
+          }
+        } catch (verifyErr) {
+          console.warn("No se pudo verificar el conteo de puntos:", verifyErr);
+        }
       } else {
         console.log("🔄 Recargando puntos desde localStorage (Supabase insert falló o no disponible)");
         await loadPickupPoints(false); // Load from localStorage
