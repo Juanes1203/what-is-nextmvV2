@@ -301,30 +301,25 @@ const Map = ({ pickupPoints, routes, vehicles = [], visibleRoutes, onRouteVisibi
         }
         
         if (vehicleLocation) {
-          // Only add marker if it's not already shown as vehicleStartLocation
-          const isAlreadyShown = vehicleStartLocation && 
-            Math.abs(vehicleStartLocation.lon - vehicleLocation.lon) < 0.0001 &&
-            Math.abs(vehicleStartLocation.lat - vehicleLocation.lat) < 0.0001;
+          // Always show vehicle marker - don't skip if it matches vehicleStartLocation
+          // The green "S" marker is for editing, the blue marker is for visualization
+          const vehicleEl = document.createElement("div");
+          vehicleEl.className = "w-10 h-10 bg-blue-500 rounded-full border-3 border-white shadow-lg flex items-center justify-center text-white font-bold text-xs";
+          vehicleEl.textContent = vehicle.name.charAt(0).toUpperCase() || `V${index + 1}`;
           
-          if (!isAlreadyShown) {
-            const vehicleEl = document.createElement("div");
-            vehicleEl.className = "w-10 h-10 bg-blue-500 rounded-full border-3 border-white shadow-lg flex items-center justify-center text-white font-bold text-xs";
-            vehicleEl.textContent = vehicle.name.charAt(0).toUpperCase() || `V${index + 1}`;
-            
-            const vehicleMarker = new mapboxgl.Marker(vehicleEl)
-              .setLngLat([vehicleLocation.lon, vehicleLocation.lat])
-              .setPopup(
-                new mapboxgl.Popup({ offset: 25 }).setHTML(
-                  `<div class="p-2">
-                    <h3 class="font-bold text-blue-600">${vehicle.name}</h3>
-                    <p class="text-sm">Ubicación: ${locationSource}</p>
-                    <p class="text-xs text-muted-foreground">${vehicleLocation.lat.toFixed(6)}, ${vehicleLocation.lon.toFixed(6)}</p>
-                  </div>`
-                )
+          const vehicleMarker = new mapboxgl.Marker(vehicleEl)
+            .setLngLat([vehicleLocation.lon, vehicleLocation.lat])
+            .setPopup(
+              new mapboxgl.Popup({ offset: 25 }).setHTML(
+                `<div class="p-2">
+                  <h3 class="font-bold text-blue-600">${vehicle.name}</h3>
+                  <p class="text-sm">Ubicación: ${locationSource}</p>
+                  <p class="text-xs text-muted-foreground">${vehicleLocation.lat.toFixed(6)}, ${vehicleLocation.lon.toFixed(6)}</p>
+                </div>`
               )
-              .addTo(map.current!);
-            markersRef.current.push(vehicleMarker);
-          }
+            )
+            .addTo(map.current!);
+          markersRef.current.push(vehicleMarker);
         }
       });
     }
@@ -548,6 +543,56 @@ const Map = ({ pickupPoints, routes, vehicles = [], visibleRoutes, onRouteVisibi
       uniqueVehicleRoutes.forEach(({ route, index: originalIndex }) => {
         const vehicleRoute = route.route_data?.route || [];
         const coordinates: number[][] = [];
+        
+        // Find the vehicle for this route to get its start_location
+        const vehicleForRoute = vehicles.find((v: any) => {
+          // Match by vehicle_id
+          if (route.vehicle_id && v.id && route.vehicle_id === v.id) return true;
+          // Match by route_data.id
+          if (route.route_data?.id && v.id && route.route_data.id === v.id) return true;
+          // Match by index if no IDs
+          return false;
+        }) || vehicles[originalIndex];
+        
+        // Add vehicle start_location as first point if available and not already in route
+        if (vehicleForRoute) {
+          let vehicleStartLoc: { lon: number; lat: number } | null = null;
+          
+          // Parse start_location if it's a JSONB string
+          let parsedStartLocation = vehicleForRoute.start_location;
+          if (parsedStartLocation && typeof parsedStartLocation === 'string') {
+            try {
+              parsedStartLocation = JSON.parse(parsedStartLocation);
+            } catch (e) {
+              console.warn(`Error parsing start_location for vehicle ${vehicleForRoute.name}:`, e);
+            }
+          }
+          
+          if (parsedStartLocation && parsedStartLocation.lon !== undefined && parsedStartLocation.lat !== undefined) {
+            vehicleStartLoc = {
+              lon: Number(parseFloat(String(parsedStartLocation.lon))),
+              lat: Number(parseFloat(String(parsedStartLocation.lat)))
+            };
+          } else if (pickupPoints.length > 0) {
+            // Fallback: use first pickup point
+            vehicleStartLoc = {
+              lon: pickupPoints[0].longitude,
+              lat: pickupPoints[0].latitude
+            };
+          }
+          
+          // Check if first stop in route is already the start location
+          const firstStop = vehicleRoute[0];
+          const isStartLocationInRoute = firstStop?.stop?.location && vehicleStartLoc &&
+            Math.abs(firstStop.stop.location.lon - vehicleStartLoc.lon) < 0.0001 &&
+            Math.abs(firstStop.stop.location.lat - vehicleStartLoc.lat) < 0.0001;
+          
+          // Add vehicle start location as first point if not already in route
+          if (vehicleStartLoc && !isStartLocationInRoute) {
+            coordinates.push([vehicleStartLoc.lon, vehicleStartLoc.lat]);
+            console.log(`[ROUTE ${originalIndex}] Agregando start_location del vehículo "${vehicleForRoute.name}" como primer punto:`, vehicleStartLoc);
+          }
+        }
         
         vehicleRoute.forEach((routeStop: any) => {
           if (routeStop.stop?.location) {
