@@ -303,16 +303,22 @@ const Map = ({ pickupPoints, routes, vehicles = [], visibleRoutes, onRouteVisibi
         if (vehicleLocation) {
           // Always show vehicle marker - don't skip if it matches vehicleStartLocation
           // The green "S" marker is for editing, the blue marker is for visualization
+          const displayName =
+            (vehicle && typeof vehicle.name === "string" && vehicle.name.trim().length > 0)
+              ? vehicle.name
+              : `Vehículo ${index + 1}`;
+          const label = displayName.charAt(0).toUpperCase();
+
           const vehicleEl = document.createElement("div");
           vehicleEl.className = "w-10 h-10 bg-blue-500 rounded-full border-3 border-white shadow-lg flex items-center justify-center text-white font-bold text-xs";
-          vehicleEl.textContent = vehicle.name.charAt(0).toUpperCase() || `V${index + 1}`;
+          vehicleEl.textContent = label;
           
           const vehicleMarker = new mapboxgl.Marker(vehicleEl)
             .setLngLat([vehicleLocation.lon, vehicleLocation.lat])
             .setPopup(
               new mapboxgl.Popup({ offset: 25 }).setHTML(
                 `<div class="p-2">
-                  <h3 class="font-bold text-blue-600">${vehicle.name}</h3>
+                  <h3 class="font-bold text-blue-600">${displayName}</h3>
                   <p class="text-sm">Ubicación: ${locationSource}</p>
                   <p class="text-xs text-muted-foreground">${vehicleLocation.lat.toFixed(6)}, ${vehicleLocation.lon.toFixed(6)}</p>
                 </div>`
