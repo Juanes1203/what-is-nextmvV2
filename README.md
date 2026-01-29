@@ -46,8 +46,9 @@ cd what-is-nextmvV2
 npm install
 
 # 4. Configurar variables de entorno
-# Crear archivo .env con las siguientes variables:
-# VITE_SUPABASE_URL=tu_url_de_supabase
+# Copiar .env.example a .env y rellenar con tus valores (nunca subas .env a Git):
+# cp .env.example .env
+# Variables: VITE_SUPABASE_URL, VITE_SUPABASE_PUBLISHABLE_KEY, VITE_NEXTMV_API_KEY
 # VITE_SUPABASE_PUBLISHABLE_KEY=tu_clave_publica
 # VITE_NEXTMV_API_KEY=tu_clave_de_nextmv
 
